@@ -58,6 +58,7 @@ A cloud-hosted, real-time text messaging app (Discord-like) built for the CSE356
 | Session store | Redis (`connect-redis`) | Low-latency, no DB load on every request |
 | Presence state | Redis | TTL keys + pub/sub for connection count and last-activity tracking |
 | Full-text search | PostgreSQL FTS (GIN index) | Sufficient at this scale; no need for Elasticsearch |
+| File/image attachments | NFS shared volume | Upload requests hit an app node (via LB), which writes to NFS. File delivery bypasses app nodes entirely — Nginx on the LB serves `/uploads/*` directly from its own NFS mount. |
 | Process management | PM2 cluster mode | One worker per vCPU; all coordination via Redis, not shared memory |
 | Schema migrations | sequelize-cli | Replaces `sync({ alter: true })` before schema grows |
 | Load balancer | Nginx (self-hosted) | Also serves React SPA — HAProxy can't serve static files |
@@ -86,6 +87,60 @@ Because Redis holds all shared state (sessions, presence, pub/sub), the load bal
 - **First bottleneck** — PostgreSQL write throughput (message sends, read state updates). Mitigations: `pgBouncer` connection pooler, read replicas for search/history queries
 - **Redis** — not a bottleneck until ~100k ops/sec; Redis Cluster available if ever needed
 - **Practical ceiling** — ~15k–25k concurrent connected users on 2 × (4GB / 2 vCPU) nodes before hitting PG write limits
+
+---
+
+## File Attachments
+
+### NFS Setup
+
+- A dedicated host with an attached block volume exports `/mnt/uploads-vol` via NFS
+- All app nodes and the LB node mount the export at `/mnt/uploads` over the private network
+- The NFS host can be colocated with PostgreSQL or Redis if needed (disk I/O vs memory/CPU — no contention)
+
+### Upload vs. Delivery
+
+| Operation | Path | Who handles it |
+|---|---|---|
+| Upload | `POST /api/upload` | LB → app node → app node writes file to NFS |
+| Delivery | `GET /uploads/*` | LB Nginx serves directly from its NFS mount — app nodes never touched |
+
+Nginx config on LB:
+```nginx
+location /uploads/ {
+    alias /mnt/uploads/;
+}
+```
+
+### Filesystem Layout
+
+```
+/mnt/uploads/
+  {userId}/
+    {uuid}.{ext}
+```
+
+Bucketed by user to avoid flat directories with millions of files. UUID filename prevents collisions and path traversal.
+
+### DB Schema: `attachments` table
+
+| column | type | notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `uploader_id` | FK → users | |
+| `message_id` | FK → messages, nullable | null until message is sent |
+| `position` | integer (0–3) | order within the message; max 4 per message |
+| `original_name` | text | display filename |
+| `mime_type` | text | validated on upload |
+| `size` | integer | bytes |
+| `path` | text | relative path: `{userId}/{uuid}.ext` |
+| `created_at` | timestamp | |
+
+### Upload Flow
+
+1. Client POSTs file → app node validates, writes to NFS, inserts `attachments` row with `message_id = null`
+2. Client sends message with attachment IDs → `message_id` is set on those rows
+3. Periodic cleanup job removes orphaned rows (`message_id` still null after ~1 hour) and deletes their files from NFS
 
 ---
 
