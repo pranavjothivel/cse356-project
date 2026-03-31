@@ -58,6 +58,7 @@ A cloud-hosted, real-time text messaging app (Discord-like) built for the CSE356
 | Session store | Redis (`connect-redis`) | Low-latency, no DB load on every request |
 | Presence state | Redis | TTL keys + pub/sub for connection count and last-activity tracking |
 | Full-text search | PostgreSQL FTS (GIN index) | Sufficient at this scale; no need for Elasticsearch |
+| File/image attachments | NFS shared volume | Mounted at `/mnt/uploads` on all app nodes; Nginx serves files directly. Ceph rejected — requires 3+ nodes for quorum and adds operational overhead not warranted at this scale. |
 | Process management | PM2 cluster mode | One worker per vCPU; all coordination via Redis, not shared memory |
 | Schema migrations | sequelize-cli | Replaces `sync({ alter: true })` before schema grows |
 | Load balancer | Nginx (self-hosted) | Also serves React SPA — HAProxy can't serve static files |
