@@ -3,6 +3,7 @@ const express = require('express');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const { Pool } = require('pg');
+const cors = require('cors');
 const sequelize = require('./db');
 require('./models/User'); // register model
 const { passport, setupOidcStrategy } = require('./auth/passport');
@@ -13,6 +14,13 @@ const app = express();
 // ──────────────────────────────────────────────
 // Middleware
 // ──────────────────────────────────────────────
+
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL
+  ],
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
