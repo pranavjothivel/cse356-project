@@ -24,12 +24,14 @@ function oauthSuccessHandler(provider) {
       if (user) {
         return req.logIn(user, (loginErr) => {
           if (loginErr) return next(loginErr);
-          res.redirect('/');
+          //res.redirect('/');
+          res.redirect(process.env.FRONTEND_URL + "/");
         });
       }
 
       if (info?.message === 'pending_link' && req.session.pendingOAuth) {
-        return res.redirect('/auth/oauth-connect');
+        //return res.redirect('/auth/oauth-connect');
+        return res.redirect(process.env.FRONTEND_URL + "/login?oauth=true");
       }
 
       res.redirect('/auth/login?error=oauth_failed');
