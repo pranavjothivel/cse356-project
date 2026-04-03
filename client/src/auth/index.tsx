@@ -37,7 +37,7 @@ function AuthContextProvider(props: any) {
             }
 
             if (res.ok) {
-                setAuth((prevState:any) => ({user: prevState.user, loggedIn: true}));
+                setAuth((prevState: any) => ({...prevState, loggedIn: true}));
                 await auth.getLoggedIn();
                 navigate("/");
                 return "";
@@ -73,7 +73,7 @@ function AuthContextProvider(props: any) {
             }
 
             if (res.ok) {
-                setAuth((prevState:any) => ({user: prevState.user, loggedIn: true}));
+               setAuth((prevState:any) => ({...prevState, loggedIn: true}));
                 await auth.getLoggedIn();
                 navigate("/");
                 return "";
@@ -97,23 +97,33 @@ function AuthContextProvider(props: any) {
             if (res.ok) {
                 let body = await res.json();
                 setAuth((prevState: any) => ({
-                    user: { id: body.id, username: body.username, displayName: body.displayName },
+                    ...prevState,
+                    user: { 
+                        id: body.id, 
+                        username: body.username, 
+                        displayName: body.displayName, 
+                        away: body.away, 
+                        away_msg: body.away_msg,
+                        avatar: body.avatar
+                    },
                     loggedIn: true
                 }));
             }
             else {
-                setAuth({
+                setAuth((prevState: any) => ({
+                    ...prevState,
                     user: null,
                     loggedIn: false
-                });
+                }));
             }
         }
         catch (err) {
             console.log(err);
-            setAuth({
+            setAuth((prevState: any) => ({
+                ...prevState,
                 user: null,
                 loggedIn: false
-            });
+            }));
         }
         
     };
@@ -121,13 +131,56 @@ function AuthContextProvider(props: any) {
     auth.logout = async () => {
         let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/logout", {
                 method: "POST",
-                credentials: "include",
+                credentials: "include"
             });
-        setAuth({
+        setAuth((prevState: any) => ({
+            ...prevState,
             user: null,
             loggedIn: false
-        });
+        }));
     }
+
+    auth.setAway = async (newAway:boolean|undefined, dontSendReq: boolean|undefined) => {
+        if (newAway == undefined) newAway = !auth.user.away;
+        let res;
+        if (!dontSendReq) {
+            res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/update-profile", {
+                method: "POST",
+                credentials: "include",
+                headers: { "content-type": "application/json" },
+                    body: JSON.stringify({away: newAway})
+            });
+        }
+        if (dontSendReq || res!.ok) {
+            // Force re-render
+            setAuth((prevState:any) => ({
+                ...prevState,
+                user: { ...prevState.user, away: newAway },
+                loggedIn: prevState.loggedIn
+            }));
+        }
+    }
+
+    auth.changeAvatar = async (file: any) => {
+        const formData = new FormData();
+        formData.append("image", file);
+        let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/avatar", {
+                    method: "POST",
+                    credentials: "include",
+                    body: formData
+                });
+        if (res.ok) {
+            let body = await res.json();
+            // Force re-render
+            setAuth((prevState:any) => ({
+                ...prevState,
+                user: { ...prevState.user, avatar: body.filename },
+                loggedIn: prevState.loggedIn
+            }));
+            return true;
+        }
+        return false;
+    };
     
     return (
         <AuthContext.Provider value={{

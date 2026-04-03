@@ -4,10 +4,14 @@ const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const { Pool } = require('pg');
 const cors = require('cors');
+const http = require('http');
+const WebSocket = require('ws');
+
 const sequelize = require('./db');
 require('./models/User'); // register model
 const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
+const { configureWSServer } = require('./ws');
 
 const app = express();
 
@@ -73,7 +77,12 @@ async function start() {
   await setupOidcStrategy();
 
   const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`Server running on port ${port}`));
+
+  // Run Express and WebSocket server on same port
+  const server = http.createServer(app);
+  const wss = new WebSocket.Server({ server });
+  configureWSServer(wss);
+  server.listen(port, () => console.log(`Server running on port ${port}`));
 }
 
 start().catch(err => { console.error('Failed to start:', err); process.exit(1); });
