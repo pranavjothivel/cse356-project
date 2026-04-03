@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const passport = require('passport');
 const { Op } = require('sequelize');
+const jwt = require('jsonwebtoken');
+
 const User = require('../models/User');
 
 // ──────────────────────────────────────────────
@@ -94,7 +96,7 @@ router.post('/logout', (req, res, next) => {
 
 // GET /auth/me
 router.get('/me', requireAuth, (req, res) => {
-  const { id, username, email, display_name, providers } = req.user;
+  const { id, username, email, display_name, providers, away } = req.user;
   res.json({
     id,
     username,
@@ -102,6 +104,7 @@ router.get('/me', requireAuth, (req, res) => {
     displayName: display_name,
     providers: (providers || []).map(p => ({ provider: p.provider, displayName: p.display_name })),
     hasPassword: !!req.user.password_hash,
+    away
   });
 });
 
@@ -252,12 +255,24 @@ router.post('/settings/unlink', requireAuth, async (req, res, next) => {
 // POST /auth/settings/update-profile
 router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
   try {
-    const { displayName, email } = req.body;
+    const { displayName, away } = req.body;
     if (displayName) req.user.display_name = displayName;
-    if (email) req.user.email = email;
+    if (away) req.user.away = away;
     await req.user.save();
     res.json({ message: 'Profile updated' });
   } catch (err) {
+    next(err);
+  }
+});
+
+
+// GET /auth/generate-ws-token
+router.get('/generate-ws-token', requireAuth, async (req, res, next) => {
+  try {
+    const token = jwt.sign({ id: req.user.id }, process.env.JWT_SECRET, { expiresIn: 60 });
+    return res.json({token});
+  }
+  catch (err) {
     next(err);
   }
 });

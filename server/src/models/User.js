@@ -49,6 +49,7 @@ User.init({
   display_name: { type: DataTypes.STRING, allowNull: true },
   // providers is a JSONB array: [{ provider, provider_id, display_name, email }]
   providers: { type: DataTypes.JSONB, defaultValue: [] },
+  away: { type: DataTypes.BOOLEAN, defaultValue: false }
 }, {
   sequelize,
   tableName: 'users',

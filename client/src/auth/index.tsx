@@ -97,7 +97,7 @@ function AuthContextProvider(props: any) {
             if (res.ok) {
                 let body = await res.json();
                 setAuth((prevState: any) => ({
-                    user: { id: body.id, username: body.username, displayName: body.displayName },
+                    user: { id: body.id, username: body.username, displayName: body.displayName, away: body.away },
                     loggedIn: true
                 }));
             }
@@ -121,12 +121,28 @@ function AuthContextProvider(props: any) {
     auth.logout = async () => {
         let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/logout", {
                 method: "POST",
-                credentials: "include",
+                credentials: "include"
             });
         setAuth({
             user: null,
             loggedIn: false
         });
+    }
+
+    auth.toggleAway = async () => {
+        let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/update-profile", {
+                method: "POST",
+                credentials: "include",
+                headers: { "content-type": "application/json" },
+                    body: JSON.stringify({away: !auth.user.away})
+            });
+        if (res.ok) {
+            // Force re-render
+            setAuth((prevState:any) => ({
+                user: { id: prevState.user.id, username: prevState.user.username, displayName: prevState.user.displayName, away: !prevState.user.away },
+                loggedIn: prevState.loggedIn
+            }));
+        }
     }
     
     return (
