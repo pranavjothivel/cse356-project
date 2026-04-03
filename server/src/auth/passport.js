@@ -2,8 +2,13 @@ const passport = require('passport');
 const LocalStrategy = require('passport-local').Strategy;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const GitHubStrategy = require('passport-github2').Strategy;
-const { Issuer, Strategy: OidcStrategy } = require('openid-client');
+const { Issuer, custom, Strategy: OidcStrategy } = require('openid-client');
 const User = require('../models/User');
+
+// Course provider sometimes takes very long to respond, so set timeout to 10 sec instead of 3.5
+custom.setHttpOptionsDefaults({
+  timeout: 10000,
+});
 
 passport.serializeUser((user, done) => {
   done(null, user.id);

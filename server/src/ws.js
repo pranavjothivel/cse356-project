@@ -140,9 +140,9 @@ const configureWSServer = (wss) => {
 
     // Initialization
     try {
+      // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
       const token = url.searchParams.get('token');
-      
       id = jwt.verify(token, process.env.JWT_SECRET).id;
 
       await redisClient.json.set("users", `$.${id}`, {presence: "online", conns: {}}, { condition: "NX" });

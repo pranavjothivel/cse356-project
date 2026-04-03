@@ -5,8 +5,9 @@ import AuthContext from "../auth";
 export default function ProfileModal({ closeCallback } : any) {
     const { auth } = useContext(AuthContext);
 
-    const [newDN, setNewDN] = useState("");
-    const [newAM, setNewAM] = useState("");
+    const [newDN, setNewDN] = useState<string>("");
+    const [newAM, setNewAM] = useState<string>("");
+    const [avatarSrc, setAvatarSrc] = useState<string|undefined>(undefined);
 
     const [err, setErr] = useState("");
 
@@ -61,6 +62,15 @@ export default function ProfileModal({ closeCallback } : any) {
         auth.setAway();
     }
 
+    const handleChangeAvatar = async (event: any) => {
+        if (event.target.files && event.target.files[0]) {
+            const file = event.target.files[0];
+            let success = await auth.changeAvatar(file);
+            if (success)
+                setAvatarSrc(URL.createObjectURL(file));
+        }
+    }
+
     return (
         <div className="modal-container">
             <div className="modal">
@@ -84,6 +94,15 @@ export default function ProfileModal({ closeCallback } : any) {
                 </div>
                 <div style={{color: "red"}}>
                     { err }
+                </div>
+                <div style={{marginTop: "8px"}}>
+                    <div>Avatar Filename: {auth.user.avatar}</div>
+                    <div style={{display: "flex"}}>
+                        <img width="50px" height="50px" src={avatarSrc}/>
+                        <div style={{display: "flex", alignItems: "center", marginLeft: "8px"}}>
+                            <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
+                        </div>
+                    </div>
                 </div>
                 <button style={{marginTop: "16px"}} onClick={handleClose}>Close</button>
             </div>

@@ -5,6 +5,7 @@ const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 
 const User = require('../models/User');
+const upload = require('../upload');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -96,7 +97,7 @@ router.post('/logout', (req, res, next) => {
 
 // GET /auth/me
 router.get('/me', requireAuth, (req, res) => {
-  const { id, username, email, display_name, providers, away, away_msg } = req.user;
+  const { id, username, email, display_name, providers, away, away_msg, avatar } = req.user;
   res.json({
     id,
     username,
@@ -105,7 +106,8 @@ router.get('/me', requireAuth, (req, res) => {
     providers: (providers || []).map(p => ({ provider: p.provider, displayName: p.display_name })),
     hasPassword: !!req.user.password_hash,
     away,
-    away_msg
+    away_msg,
+    avatar
   });
 });
 
@@ -266,6 +268,18 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+// POST /auth/settings/avatar
+router.post('/settings/avatar', requireAuth, upload.single('image'), async (req, res, next) => {
+  if (!req.file) {
+    return res.sendStatus(400);
+  }
+  let filename = req.file.filename;
+  req.user.avatar = filename;
+  req.user.save();
+  return res.json({filename});
+});
+
 
 
 // GET /auth/generate-ws-token

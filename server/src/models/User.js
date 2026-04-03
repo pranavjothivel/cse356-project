@@ -50,7 +50,8 @@ User.init({
   // providers is a JSONB array: [{ provider, provider_id, display_name, email }]
   providers: { type: DataTypes.JSONB, defaultValue: [] },
   away: { type: DataTypes.BOOLEAN, defaultValue: false },
-  away_msg: { type: DataTypes.STRING, defaultValue: "" }
+  away_msg: { type: DataTypes.STRING, defaultValue: "" },
+  avatar: { type: DataTypes.STRING, defaultValue: "1" }
 }, {
   sequelize,
   tableName: 'users',

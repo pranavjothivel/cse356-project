@@ -10,7 +10,7 @@ import ProfileModal from "./ProfileModal";
 export default function HomeScreen() {
     const { auth } = useContext(AuthContext);
     const navigate = useNavigate();
-    const idle = useIdle(5000);
+    const idle = useIdle(60000);
 
     const [modal, setModal] = useState<string>("");
 
@@ -40,7 +40,10 @@ export default function HomeScreen() {
                     // Don't give outside access until server has completed initialization
                     if (msg === "ready") {
                         ws.current = socket;
+
+                        // Indicate initial presence
                         if (auth.user.away) sendMsg({type: "presence", value: "away"});
+                        else sendMsg({type: "presence", value: "online"});
                     }
                     else if (msg === "away") {
                         auth.setAway(true, true);
