@@ -96,7 +96,7 @@ router.post('/logout', (req, res, next) => {
 
 // GET /auth/me
 router.get('/me', requireAuth, (req, res) => {
-  const { id, username, email, display_name, providers, away } = req.user;
+  const { id, username, email, display_name, providers, away, away_msg } = req.user;
   res.json({
     id,
     username,
@@ -104,7 +104,8 @@ router.get('/me', requireAuth, (req, res) => {
     displayName: display_name,
     providers: (providers || []).map(p => ({ provider: p.provider, displayName: p.display_name })),
     hasPassword: !!req.user.password_hash,
-    away
+    away,
+    away_msg
   });
 });
 
@@ -255,9 +256,10 @@ router.post('/settings/unlink', requireAuth, async (req, res, next) => {
 // POST /auth/settings/update-profile
 router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
   try {
-    const { displayName, away } = req.body;
+    const { displayName, away, away_msg } = req.body;
     if (displayName) req.user.display_name = displayName;
-    if (away) req.user.away = away;
+    if (away !== undefined) req.user.away = away;
+    if (away_msg) req.user.away_msg = away_msg;
     await req.user.save();
     res.json({ message: 'Profile updated' });
   } catch (err) {

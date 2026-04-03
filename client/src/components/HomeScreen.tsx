@@ -33,9 +33,21 @@ export default function HomeScreen() {
             })
             .then(data => {
                 const socket = new WebSocket(import.meta.env.VITE_WS_URL + `?token=${data.token}`);
-                socket.addEventListener("open", (event) => {
-                    ws.current = socket;
-                    if (auth.user.away) sendMsg({type: "presence", value: "away"});
+
+                socket.addEventListener("message", (event) => {
+                    let msg = event.data.toString();
+
+                    // Don't give outside access until server has completed initialization
+                    if (msg === "ready") {
+                        ws.current = socket;
+                        if (auth.user.away) sendMsg({type: "presence", value: "away"});
+                    }
+                    else if (msg === "away") {
+                        auth.setAway(true, true);
+                    }
+                    else if (msg === "unaway") {
+                        auth.setAway(false, true);
+                    }
                 });
             })
             .catch(err => {
@@ -57,13 +69,19 @@ export default function HomeScreen() {
                     sendMsg({type: "presence", value: "online"});
                 }
             }
-            else {
-                // Since idle is dependancy, this will run whenever idle changes
-                // Might not be an issue?
-                sendMsg({type: "presence", value: "away"});
-            }
         }
     }, [idle, auth.user?.away]);
+
+    useEffect(() => {
+        if (auth.loggedIn) {
+            if (auth.user.away) {
+                sendMsg({type: "presence", value: "away"});
+            }
+            else if (auth.user.away === false) {
+                sendMsg({type: "presence", value: "unaway"});
+            }
+        }
+    }, [auth.user?.away]);
 
     const sendMsg = (msg: any) => {
         if (ws.current) {

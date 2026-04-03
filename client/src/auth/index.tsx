@@ -97,7 +97,7 @@ function AuthContextProvider(props: any) {
             if (res.ok) {
                 let body = await res.json();
                 setAuth((prevState: any) => ({
-                    user: { id: body.id, username: body.username, displayName: body.displayName, away: body.away },
+                    user: { id: body.id, username: body.username, displayName: body.displayName, away: body.away, away_msg: body.away_msg },
                     loggedIn: true
                 }));
             }
@@ -129,17 +129,21 @@ function AuthContextProvider(props: any) {
         });
     }
 
-    auth.toggleAway = async () => {
-        let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/update-profile", {
+    auth.setAway = async (newAway:boolean|undefined, dontSendReq: boolean|undefined) => {
+        if (newAway == undefined) newAway = !auth.user.away;
+        let res;
+        if (!dontSendReq) {
+            res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/update-profile", {
                 method: "POST",
                 credentials: "include",
                 headers: { "content-type": "application/json" },
-                    body: JSON.stringify({away: !auth.user.away})
+                    body: JSON.stringify({away: newAway})
             });
-        if (res.ok) {
+        }
+        if (dontSendReq || res!.ok) {
             // Force re-render
             setAuth((prevState:any) => ({
-                user: { id: prevState.user.id, username: prevState.user.username, displayName: prevState.user.displayName, away: !prevState.user.away },
+                user: { ...prevState.user, away: newAway },
                 loggedIn: prevState.loggedIn
             }));
         }
