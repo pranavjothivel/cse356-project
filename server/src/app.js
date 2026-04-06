@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const pgSession = require('connect-pg-simple')(session);
+//const pgSession = require('connect-pg-simple')(session);
+const { RedisStore } = require('connect-redis');
 const { Pool } = require('pg');
 const cors = require('cors');
 const http = require('http');
@@ -11,6 +12,7 @@ const sequelize = require('./db');
 require('./models/User'); // register model
 const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
+const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
 const app = express();
@@ -31,11 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 // Sessions stored in Postgres — each session is independent.
 // Signing out destroys only the one session row; other sessions are unaffected.
 app.use(session({
-  store: new pgSession({
-    pool: new Pool({ connectionString: process.env.DATABASE_URL }),
-    tableName: 'sessions',
-    createTableIfMissing: true,
-  }),
+  store: new RedisStore({ client: redisClient }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
