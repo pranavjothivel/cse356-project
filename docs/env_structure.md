@@ -20,4 +20,4 @@ OIDC_CALLBACK_URL - [server url]/auth/oidc/callback
 FRONTEND_URL  
 JWT_SECRET - set this to whatever you want  
 BASE_URL - server url with no port  
-UPLOAD_DIR - where uploaded images should go (in production, should be somewhere from which nginx can direct;y serve them)
+UPLOAD_DIR - where uploaded images should go (in production, should be somewhere from which nginx can directly serve them)
