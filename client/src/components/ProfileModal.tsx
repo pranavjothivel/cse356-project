@@ -9,6 +9,10 @@ export default function ProfileModal({ closeCallback } : any) {
     const [newAM, setNewAM] = useState<string>("");
     const [avatarSrc, setAvatarSrc] = useState<string|undefined>(undefined);
 
+    const [currentPassword, setCurrentPassword] = useState<string>("");
+    const [newPassword, setNewPassword] = useState<string>("");
+    const [pwDisplay, setPWDisplay] = useState<string>("");
+
     const [err, setErr] = useState("");
 
     const handleClose = () => {
@@ -71,23 +75,56 @@ export default function ProfileModal({ closeCallback } : any) {
         }
     }
 
+    const handleCurrentPWInput = (event: any) => {
+        setCurrentPassword(event.target.value);
+    }
+    const handleNewPWInput = (event: any) => {
+        setNewPassword(event.target.value);
+    }
+    const handleChangePW = async () => {
+        let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/set-password", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ currentPassword, newPassword })
+                });
+        if (res.ok) {
+            setErr("");
+            setNewDN("");
+
+            // Visual indicator that request didnt fail
+            let str = "";
+            for (let i = 0; i < newPassword.length; i++) str += "*";
+            setPWDisplay(str);
+        }
+        else {
+            setErr("Error");
+        }
+    }
+
     return (
         <div className="modal-container">
             <div className="modal">
-                <div>Id: {auth.user.id}</div>
-                <div>Username: {auth.user.username}</div>
-                <div style={{display: "flex"}}>
+                <div style={{marginTop: "8px"}}>Id: {auth.user.id}</div>
+                <div style={{marginTop: "8px"}}>Username: {auth.user.username}</div>
+                <div style={{display: "flex", marginTop: "8px"}}>
                     <div>Display Name: {auth.user.displayName}</div>
                     <input style={{marginLeft: "8px"}} type="text" placeholder="New Display Name" onKeyUp={handleNewDNInput}/>
                     <button style={{marginTop: "auto"}} onClick={handleUpdateDN}>Update Display Name</button>
                 </div>
-                <div>
+                <div style={{display: "flex", marginTop: "8px"}}>
+                    <div>Password: {pwDisplay}</div>
+                    <input style={{marginLeft: "8px"}} type="password" placeholder="Current password" onKeyUp={handleCurrentPWInput}/>
+                    <input style={{marginLeft: "8px"}} type="password" placeholder="New password" onKeyUp={handleNewPWInput}/>
+                    <button style={{marginTop: "auto"}} onClick={handleChangePW}>Change Password</button>
+                </div>
+                <div style={{marginTop: "8px"}}>
                     <label>
                         <input type="checkbox" onChange={handleToggleAway} checked={auth.user.away}/> 
                         Set presence to away
                     </label>
                 </div>
-                <div style={{display: "flex"}}>
+                <div style={{display: "flex", marginTop: "8px"}}>
                     <div>Away Message: {auth.user.away_msg}</div>
                     <input style={{marginLeft: "8px"}} type="text" placeholder="New Away Message" onKeyUp={handleNewAMInput}/>
                     <button style={{marginTop: "auto"}} onClick={handleUpdateAM}>Update Away Message</button>
