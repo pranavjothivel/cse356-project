@@ -129,7 +129,7 @@ function AuthContextProvider(props: any) {
     };
 
     auth.logout = async () => {
-        let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/logout", {
+        await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/logout", {
                 method: "POST",
                 credentials: "include"
             });
