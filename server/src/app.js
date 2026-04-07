@@ -17,6 +17,9 @@ const { configureWSServer } = require('./ws');
 
 const app = express();
 
+// Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
+app.set('trust proxy', 1);
+
 // ──────────────────────────────────────────────
 // Middleware
 // ──────────────────────────────────────────────
