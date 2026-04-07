@@ -128,4 +128,24 @@ systemctl reload haproxy
 | `SSH_PRIVATE_KEY` | Private key for `deploy` user on app nodes |
 | `APP_NODE_1` | `10.0.3.93` (private IP of app node 1) |
 | `LB_NODE` | `130.245.136.254` (public IP of LB node) |
-| `ENV_FILE` | Full `.env` file contents (see CLAUDE.md for required vars) |
+| `ENV_FILE` | Full `.env` file contents — must include all vars below |
+
+### ENV_FILE contents
+
+```
+DATABASE_URL=postgresql://user:password@<db-host>:5432/cse356
+REDIS_URL=redis://<redis-host>:6379
+SESSION_SECRET=<random 32-byte hex>
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_CALLBACK_URL=https://group1.cse356.compas.cs.stonybrook.edu/auth/google/callback
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_CALLBACK_URL=https://group1.cse356.compas.cs.stonybrook.edu/auth/github/callback
+OIDC_ISSUER=https://infra-auth.cse356.compas.cs.stonybrook.edu/realms/oauth
+OIDC_CLIENT_ID=web-service
+OIDC_CLIENT_SECRET=web-service-secret
+OIDC_CALLBACK_URL=https://group1.cse356.compas.cs.stonybrook.edu/auth/oidc/callback
+NODE_ENV=production
+PORT=3000
+```
