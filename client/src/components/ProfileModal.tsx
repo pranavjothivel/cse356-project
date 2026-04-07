@@ -62,7 +62,7 @@ export default function ProfileModal({ closeCallback } : any) {
         }
     }
 
-    const handleToggleAway = (event: any) => {
+    const handleToggleAway = (_event: any) => {
         auth.setAway();
     }
 

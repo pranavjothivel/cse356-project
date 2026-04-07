@@ -9,7 +9,7 @@ export default function LoginScreen() {
 
     const [searchParams] = useSearchParams();
 
-    const [oauth, setOAuth] = useState(searchParams.get('oauth') !== null);
+    const [oauth, _setOAuth] = useState(searchParams.get('oauth') !== null);
 
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
