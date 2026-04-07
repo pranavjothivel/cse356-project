@@ -1,5 +1,5 @@
 app_nodes:
-  - name: app-node-1
+  - name: group1-api-node-01
     ip: 130.245.136.217
 
 lb_node: 130.245.136.254
