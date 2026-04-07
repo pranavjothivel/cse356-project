@@ -60,6 +60,8 @@ jobs:
       - name: Build frontend
         if: steps.fe.outputs.exists == 'true'
         working-directory: client
+        env:
+          VITE_BACKEND_URL: https://group1.cse356.compas.cs.stonybrook.edu
         run: npm ci && npm run build
 
       - name: Deploy frontend to LB node
