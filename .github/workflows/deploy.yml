@@ -62,11 +62,9 @@ jobs:
         working-directory: client
         run: npm ci && npm run build
 
-      - name: Deploy frontend to app node 1
+      - name: Deploy frontend to LB node
         if: steps.fe.outputs.exists == 'true'
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            deploy@${{ secrets.APP_NODE_1 }} "mkdir -p /srv/app/frontend/dist"
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            client/dist/ deploy@${{ secrets.APP_NODE_1 }}:/srv/app/frontend/dist/
+            client/dist/ root@${{ secrets.LB_NODE }}:/srv/frontend/dist/
