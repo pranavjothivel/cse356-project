@@ -3,6 +3,12 @@ name: Deploy
 on:
   push:
     branches: [main, pranavjothivel/deployment-pipeline]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for direct deploy'
+        required: false
+        default: 'manual deploy'
 
 jobs:
   deploy:
