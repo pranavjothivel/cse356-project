@@ -11,13 +11,38 @@ on:
         default: 'manual deploy'
 
 jobs:
-  deploy:
-    name: Deploy to app nodes
+  setup:
+    name: Read infra config
     runs-on: ubuntu-latest
-
+    outputs:
+      matrix: ${{ steps.nodes.outputs.matrix }}
+      lb: ${{ steps.nodes.outputs.lb }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Parse nodes
+        id: nodes
+        run: |
+          matrix=$(yq -o=json '.app_nodes' infra/nodes.yml | tr -d '\n')
+          lb=$(yq '.lb_node' infra/nodes.yml)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "lb=$lb"         >> "$GITHUB_OUTPUT"
+
+  deploy-app:
+    name: Deploy to ${{ matrix.host }}
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        host: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Set up SSH key
         run: |
@@ -26,12 +51,14 @@ jobs:
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Deploy to app node 1
+      - name: Deploy
         env:
-          HOST: ${{ secrets.APP_NODE_1 }}
+          HOST: ${{ matrix.host }}
           ENV_FILE: ${{ secrets.ENV_FILE }}
           SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
         run: |
+          echo "Deploying to $HOST..."
+
           # 1. Write .env on the remote host
           printf '%s' "$ENV_FILE" | $SSH deploy@$HOST "mkdir -p /srv/app && cat > /srv/app/.env"
 
@@ -56,7 +83,13 @@ jobs:
             fi
           REMOTE
 
-      # ── FRONTEND (no-op until frontend/package.json exists) ───────────────
+  deploy-frontend:
+    name: Deploy frontend to LB
+    needs: [setup, deploy-app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Check if frontend exists
         id: fe
         run: |
@@ -70,9 +103,17 @@ jobs:
           VITE_BACKEND_URL: https://group1.cse356.compas.cs.stonybrook.edu
         run: npm ci && npm run build
 
+      - name: Set up SSH key
+        if: steps.fe.outputs.exists == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
       - name: Deploy frontend to LB node
         if: steps.fe.outputs.exists == 'true'
         run: |
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            client/dist/ root@${{ secrets.LB_NODE }}:/srv/frontend/dist/
+            client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
