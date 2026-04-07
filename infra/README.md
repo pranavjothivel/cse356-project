@@ -1,0 +1,18 @@
+# Infrastructure
+
+All nodes are **Clanode 2G** Linodes on the CSE356 course cluster.
+
+## Node Inventory
+
+| Label | Role | Public IP | Private IP |
+|---|---|---|---|
+| `group1-api-node-01` | API app node (PM2 / Node.js) | `130.245.136.217` | — |
+| `group1-db-psql-01` | PostgreSQL database | `130.245.136.224` | `10.0.1.235` |
+| `group1-db-redis-01` | Redis (sessions, pub/sub, presence) | `130.245.136.86` | `10.0.0.136` |
+| `group1-web-lb01` | Load balancer + frontend (Nginx) | `130.245.136.254` | — |
+
+> App nodes and the LB connect to PostgreSQL and Redis over the **private network** (10.x addresses). Public IPs for DB/cache nodes are for direct SSH access only — never exposed to application traffic.
+
+## Config Files
+
+- [`nodes.yml`](nodes.yml) — app node and LB IPs read by the CI/CD deploy pipeline
