@@ -33,8 +33,9 @@ function oauthSuccessHandler(provider) {
       }
 
       if (info?.message === 'pending_link' && req.session.pendingOAuth) {
-        //return res.redirect('/auth/oauth-connect');
-        return res.redirect(process.env.FRONTEND_URL + "/login?oauth=true");
+        return req.session.save(() => {
+          res.redirect(process.env.FRONTEND_URL + "/login?oauth=true");
+        });
       }
 
       res.redirect('/auth/login?error=oauth_failed');
