@@ -11,6 +11,7 @@ HAProxy handles SSL termination and request routing. Nginx serves the React SPA 
 Client
   └─ HTTPS :443 → HAProxy
                     ├─ /api/* → App node(s) (port 3000)
+                    ├─ /auth/* → App node(s) (port 3000)
                     ├─ /ws/*  → App node(s) (port 3000)
                     └─ /*     → Nginx :8080 → /srv/frontend/dist/
 ```
@@ -47,7 +48,7 @@ frontend https_front
     http-request set-header X-Forwarded-Proto https
     http-request set-header X-Real-IP %[src]
 
-    acl is_api  path_beg /api
+    acl is_api  path_beg /api /auth
     acl is_ws   path_beg /ws
 
     use_backend app_servers if is_api or is_ws
