@@ -35,12 +35,12 @@ jobs:
           echo "lb=$lb"         >> "$GITHUB_OUTPUT"
 
   deploy-app:
-    name: Deploy to ${{ matrix.host }}
+    name: Deploy to ${{ matrix.node.name }} (${{ matrix.node.ip }})
     needs: setup
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        host: ${{ fromJSON(needs.setup.outputs.matrix) }}
+        node: ${{ fromJSON(needs.setup.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -53,11 +53,12 @@ jobs:
 
       - name: Deploy
         env:
-          HOST: ${{ matrix.host }}
+          HOST: ${{ matrix.node.ip }}
+          NAME: ${{ matrix.node.name }}
           ENV_FILE: ${{ secrets.ENV_FILE }}
           SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
         run: |
-          echo "Deploying to $HOST..."
+          echo "Deploying to $NAME ($HOST)..."
 
           # 1. Write .env on the remote host
           printf '%s' "$ENV_FILE" | $SSH deploy@$HOST "mkdir -p /srv/app && cat > /srv/app/.env"
