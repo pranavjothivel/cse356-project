@@ -1,0 +1,72 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to app nodes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Deploy to app node 1
+        env:
+          HOST: ${{ secrets.APP_NODE_1 }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+        run: |
+          # 1. Write .env on the remote host
+          printf '%s' "$ENV_FILE" | $SSH deploy@$HOST "mkdir -p /srv/app && cat > /srv/app/.env"
+
+          # 2. Rsync source code (never touches .env or node_modules)
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='node_modules/' \
+            --exclude='.git/' \
+            --exclude='frontend/' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./ deploy@$HOST:/srv/app/
+
+          # 3. Install deps and reload PM2 (start on first deploy)
+          $SSH deploy@$HOST bash <<'REMOTE'
+            set -euo pipefail
+            export PATH="$PATH:/usr/local/bin"
+            cd /srv/app
+            npm ci --omit=dev
+            if pm2 describe cse356 > /dev/null 2>&1; then
+              pm2 reload ecosystem.config.js --update-env
+            else
+              pm2 start ecosystem.config.js
+              pm2 save
+            fi
+          REMOTE
+
+      # ── FRONTEND (no-op until frontend/package.json exists) ───────────────
+      - name: Check if frontend exists
+        id: fe
+        run: |
+          [ -f frontend/package.json ] && echo "exists=true" >> "$GITHUB_OUTPUT" \
+            || echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        if: steps.fe.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Deploy frontend to app node 1
+        if: steps.fe.outputs.exists == 'true'
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            frontend/dist/ deploy@${{ secrets.APP_NODE_1 }}:/srv/app/frontend/dist/
