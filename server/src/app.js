@@ -9,9 +9,11 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const sequelize = require('./db');
-require('./models/User'); // register model
+require('./models'); // register all models + associations
 const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
+const communitiesRouter = require('./routes/communities');
+const channelsRouter = require('./routes/channels');
 const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
@@ -55,6 +57,8 @@ app.use(passport.session());
 // Routes
 // ──────────────────────────────────────────────
 app.use('/api/auth', authRouter);
+app.use('/api/communities', communitiesRouter);
+app.use('/api/channels', channelsRouter);
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });

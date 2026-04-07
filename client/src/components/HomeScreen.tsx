@@ -6,6 +6,9 @@ import { useIdle } from "@uidotdev/usehooks";
 import AuthContext from "../auth";
 
 import ProfileModal from "./ProfileModal";
+import CommunitySidebar from "./CommunitySidebar";
+import CommunityView from "./CommunityView";
+import "./Communities.css";
 
 export default function HomeScreen() {
     const { auth } = useContext(AuthContext);
@@ -13,6 +16,7 @@ export default function HomeScreen() {
     const idle = useIdle(60000);
 
     const [modal, setModal] = useState<string>("");
+    const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
 
     const ws = useRef<WebSocket|null>(null);
 
@@ -107,14 +111,27 @@ export default function HomeScreen() {
     }
 
     return (
-        <div className="screen">
-            <div style={{display: "flex"}}>
-                <div className="cursorPtr" onClick={() => {changeModal("profile")}}>Profile</div>
-                <div className="cursorPtr" style={{marginLeft: "16px"}} onClick={logout}>Logout</div>
+        <div className="screen app-shell">
+            <CommunitySidebar
+                selectedId={selectedCommunityId}
+                onSelect={setSelectedCommunityId}
+            />
+            <div className="main-content">
+                <div className="main-content-header" style={{justifyContent: "flex-end"}}>
+                    <div style={{display: "flex", gap: 12}}>
+                        <div className="cursorPtr" onClick={() => {changeModal("profile")}}>Profile</div>
+                        <div className="cursorPtr" onClick={logout}>Logout</div>
+                    </div>
+                </div>
+                {selectedCommunityId ? (
+                    <CommunityView communityId={selectedCommunityId} onLeft={() => setSelectedCommunityId(null)} />
+                ) : (
+                    <div style={{flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#666"}}>
+                        Select or create a community to get started
+                    </div>
+                )}
             </div>
-            {
-                modalContent
-            }
+            {modalContent}
         </div>
     )
 }
