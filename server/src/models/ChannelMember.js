@@ -3,8 +3,6 @@ const sequelize = require('../db');
 
 class ChannelMember extends Model {}
 
-ChannelMember.removeAttribute('id');
-
 ChannelMember.init({
   channel_id: {
     type: DataTypes.UUID,

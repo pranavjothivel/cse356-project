@@ -3,8 +3,6 @@ const sequelize = require('../db');
 
 class CommunityMember extends Model {}
 
-CommunityMember.removeAttribute('id');
-
 CommunityMember.init({
   community_id: {
     type: DataTypes.UUID,
