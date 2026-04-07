@@ -56,8 +56,7 @@ frontend https_front
 
 backend app_servers
     balance roundrobin
-    option httpchk GET /api/health
-    http-check expect status 200
+    option httpchk GET /
 
     cookie SERVERID insert indirect nocache
 
