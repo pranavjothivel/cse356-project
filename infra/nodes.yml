@@ -1,5 +1,9 @@
 app_nodes:
   - name: group1-api-node-01
     ip: 130.245.136.217
+    private_ip: 10.0.3.93
+  - name: group1-api-node-02
+    ip: 130.245.136.149
+    private_ip: 10.0.1.121
 
 lb_node: 130.245.136.254
