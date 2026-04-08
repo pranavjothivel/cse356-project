@@ -70,12 +70,24 @@ export default function ProfileModal({ closeCallback } : any) {
         auth.setAway();
     }
 
-    const handleChangeAvatar = async (event: any) => {
+    const [pendingAvatarFile, setPendingAvatarFile] = useState<File|null>(null);
+
+    const handleChangeAvatar = (event: any) => {
         if (event.target.files && event.target.files[0]) {
             const file = event.target.files[0];
-            let success = await auth.changeAvatar(file);
-            if (success)
-                setAvatarSrc(URL.createObjectURL(file));
+            setPendingAvatarFile(file);
+            setAvatarSrc(URL.createObjectURL(file));
+        }
+    }
+
+    const handleSaveAvatar = async () => {
+        if (!pendingAvatarFile) return;
+        let success = await auth.changeAvatar(pendingAvatarFile);
+        if (success) {
+            setPendingAvatarFile(null);
+            setErr("");
+        } else {
+            setErr("Failed to upload avatar");
         }
     }
 
@@ -137,12 +149,16 @@ export default function ProfileModal({ closeCallback } : any) {
                     { err }
                 </div>
                 <div style={{marginTop: "8px"}}>
-                    <div>Avatar Filename: {auth.user.avatar}</div>
-                    <div style={{display: "flex"}}>
-                        <img width="50px" height="50px" src={avatarSrc}/>
-                        <div style={{display: "flex", alignItems: "center", marginLeft: "8px"}}>
-                            <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
-                        </div>
+                    <div>Avatar</div>
+                    <div style={{display: "flex", alignItems: "center", gap: "8px", marginTop: "4px"}}>
+                        <img
+                            width="50px"
+                            height="50px"
+                            style={{objectFit: "cover", borderRadius: "4px", background: "#444"}}
+                            src={avatarSrc || (auth.user.avatar ? import.meta.env.VITE_BACKEND_URL.replace('/api', '') + auth.user.avatar : undefined)}
+                        />
+                        <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
+                        {pendingAvatarFile && <button onClick={handleSaveAvatar}>Save Avatar</button>}
                     </div>
                 </div>
                 <button style={{marginTop: "16px"}} onClick={handleClose}>Close</button>

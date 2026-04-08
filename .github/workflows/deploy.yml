@@ -75,6 +75,9 @@ jobs:
             set -euo pipefail
             export PATH="$PATH:/usr/local/bin"
             cd /srv/app
+            # Ensure uploads directory exists and is writable
+            sudo mkdir -p /var/www/uploads
+            sudo chown deploy:deploy /var/www/uploads
             npm ci --omit=dev
             if pm2 describe cse356 > /dev/null 2>&1; then
               pm2 reload ecosystem.config.js --update-env

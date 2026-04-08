@@ -272,31 +272,17 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
   }
 });
 
-// POST /auth/settings/avatar
-router.post('/settings/avatar', requireAuth, upload.single('image'), async (req, res, next) => {
-  if (!req.file) {
-    return res.sendStatus(400);
+// POST /auth/settings/avatar  { url: '/uploads/<filename>' }
+router.post('/settings/avatar', requireAuth, async (req, res, next) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url is required' });
+    req.user.avatar = url;
+    await req.user.save();
+    res.json({ url });
+  } catch (err) {
+    next(err);
   }
-  
-  const bucketName = "images";
-
-  const objectName = `${req.user.id}/${crypto.randomUUID() + path.extname(req.file.originalname)}`;
-
-  const exists = await minioClient.bucketExists(bucketName);
-  if (!exists) {
-    return res.sendStatus(500);
-  }
-
-  // Destroy current avatar if it is not the default ('1')
-  if (req.user.avatar !== '1') {
-    await minioClient.removeObject(bucketName, req.user.avatar);
-  }
-
-  await minioClient.putObject(bucketName, objectName, req.file.buffer);
-
-  req.user.avatar = objectName;
-  req.user.save();
-  return res.json({filename: objectName});
 });
 
 
