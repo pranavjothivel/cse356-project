@@ -7,7 +7,7 @@ export default function ProfileModal({ closeCallback } : any) {
 
     const [newDN, setNewDN] = useState<string>("");
     const [newAM, setNewAM] = useState<string>("");
-    const [avatarSrc, setAvatarSrc] = useState<string|undefined>(undefined);
+    const [avatarSrc, setAvatarSrc] = useState<string>("");
 
     const [currentPassword, setCurrentPassword] = useState<string>("");
     const [newPassword, setNewPassword] = useState<string>("");
@@ -85,7 +85,6 @@ export default function ProfileModal({ closeCallback } : any) {
         let success = await auth.changeAvatar(pendingAvatarFile);
         if (success) {
             setPendingAvatarFile(null);
-            setAvatarSrc(import.meta.env.VITE_IMAGE_URL + "/" + auth.user.avatar);
             setErr("");
         } else {
             setErr("Failed to upload avatar");
@@ -156,7 +155,7 @@ export default function ProfileModal({ closeCallback } : any) {
                             width="50px"
                             height="50px"
                             style={{objectFit: "cover", borderRadius: "4px", background: "#444"}}
-                            src={avatarSrc || (auth.user.avatar ? import.meta.env.VITE_BACKEND_URL.replace('/api', '') + auth.user.avatar : undefined)}
+                            src={avatarSrc}
                         />
                         <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
                         {pendingAvatarFile && <button onClick={handleSaveAvatar}>Save Avatar</button>}
