@@ -102,6 +102,7 @@ jobs:
         working-directory: client
         env:
           VITE_BACKEND_URL: https://group1.cse356.compas.cs.stonybrook.edu/api
+          VITE_WS_URL: wss://group1.cse356.compas.cs.stonybrook.edu/api
         run: npm ci && npm run build
 
       - name: Set up SSH key
