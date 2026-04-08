@@ -132,9 +132,9 @@ jobs:
       - name: Check for config changes
         id: changes
         run: |
-          git diff --name-only HEAD~1 HEAD -- infra/haproxy/ infra/nginx/
-          haproxy=$(git diff --name-only HEAD~1 HEAD -- infra/haproxy/haproxy.cfg | wc -l)
-          nginx=$(git diff --name-only HEAD~1 HEAD -- infra/nginx/ | wc -l)
+          base=$(git merge-base HEAD origin/main)
+          haproxy=$(git diff --name-only "$base" HEAD -- infra/haproxy/haproxy.cfg | wc -l)
+          nginx=$(git diff --name-only "$base" HEAD -- infra/nginx/ | wc -l)
           echo "haproxy=$( [ "$haproxy" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
           echo "nginx=$( [ "$nginx" -gt 0 ] && echo true || echo false )"     >> "$GITHUB_OUTPUT"
 
