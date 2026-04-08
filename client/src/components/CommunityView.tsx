@@ -3,6 +3,7 @@ import { apiFetch, apiPost, apiDelete } from "../api";
 import ChannelList from "./ChannelList";
 import ChannelView from "./ChannelView";
 import MemberList from "./MemberList";
+import SearchModal from "./SearchModal";
 
 interface ChannelInfo {
   id: string;
@@ -25,6 +26,7 @@ interface Props {
 export default function CommunityView({ communityId, onLeft }: Props) {
   const [data, setData] = useState<CommunityData | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
 
   const fetchData = async () => {
     const res = await apiFetch(`/communities/${communityId}`);
@@ -60,6 +62,7 @@ export default function CommunityView({ communityId, onLeft }: Props) {
       <div className="main-content-header">
         <span style={{ fontWeight: "bold" }}>{data.community.name}</span>
         <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-small" style={{ fontSize: "0.8em" }} onClick={() => setShowSearch(true)}>Search</button>
           {data.role !== "owner" && (
             <button className="btn-small btn-danger" style={{ fontSize: "0.8em" }} onClick={handleLeave}>Leave</button>
           )}
@@ -86,6 +89,13 @@ export default function CommunityView({ communityId, onLeft }: Props) {
         )}
         <MemberList communityId={communityId} userRole={data.role} />
       </div>
+      {showSearch && (
+        <SearchModal
+          scope="community"
+          scopeId={communityId}
+          onClose={() => setShowSearch(false)}
+        />
+      )}
     </>
   );
 }

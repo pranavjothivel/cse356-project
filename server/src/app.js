@@ -17,6 +17,7 @@ const channelsRouter = require('./routes/channels');
 const conversationsRouter = require('./routes/conversations');
 const usersRouter = require('./routes/users');
 const uploadRouter = require('./routes/upload');
+const searchRouter = require('./routes/search');
 const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
@@ -61,6 +62,7 @@ app.use(passport.session());
 // ──────────────────────────────────────────────
 app.use('/uploads', express.static(process.env.UPLOAD_DIR || 'uploads'));
 app.use('/api/upload', uploadRouter);
+app.use('/api/search', searchRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/communities', communitiesRouter);
 app.use('/api/channels', channelsRouter);

@@ -24,6 +24,8 @@ Message.init({
     { fields: ['conversation_id', 'created_at'] },
     { fields: ['channel_id', 'created_at'] },
     { fields: ['author_id'] },
+    // GIN index for full-text search on message content
+    { fields: [sequelize.literal("to_tsvector('english', content)")], using: 'GIN', name: 'messages_content_fts_idx' },
   ],
 });
 

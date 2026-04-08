@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState, useCallback, useRef } from "react";
+import SearchModal from "./SearchModal";
 import AuthContext from "../auth";
 
 // Minimal direct-conversations UI. Sidebar lists conversations; main pane shows
@@ -64,6 +65,7 @@ export default function ConversationsPanel() {
 
     const selected = conversations.find(c => c.id === selectedId) || null;
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [showSearch, setShowSearch] = useState(false);
 
     // Build a global id -> display label map from every conversation we know about,
     // so message author labels can show usernames instead of UUID prefixes.
@@ -323,6 +325,7 @@ export default function ConversationsPanel() {
                             return (
                                 <div style={{ padding: 8, borderBottom: "1px solid #444", display: "flex", alignItems: "center", gap: 8 }}>
                                     <div style={{ flex: 1, fontWeight: "bold" }}>{label}</div>
+                                    <button onClick={() => setShowSearch(true)}>search</button>
                                     <button onClick={hideConversation}>hide</button>
                                 </div>
                             );
@@ -401,6 +404,13 @@ export default function ConversationsPanel() {
                 )}
             </div>
 
+            {showSearch && selected && (
+                <SearchModal
+                    scope="conversation"
+                    scopeId={selected.id}
+                    onClose={() => setShowSearch(false)}
+                />
+            )}
             {error && (
                 <div style={{ position: "absolute", bottom: 8, right: 8, background: "#c0392b", color: "white", padding: 8, fontSize: 12, borderRadius: 4 }}>
                     {error} <button onClick={() => setError("")}>×</button>
