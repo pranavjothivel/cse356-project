@@ -17,7 +17,7 @@ export default function ProfileModal({ closeCallback } : any) {
 
     useEffect(() => {
         setAvatarSrc(import.meta.env.VITE_IMAGE_URL + "/" + auth.user.avatar);
-    }, []);
+    }, [auth.user.avatar]);
 
     const handleClose = () => {
         closeCallback();
@@ -85,6 +85,7 @@ export default function ProfileModal({ closeCallback } : any) {
         let success = await auth.changeAvatar(pendingAvatarFile);
         if (success) {
             setPendingAvatarFile(null);
+            setAvatarSrc(import.meta.env.VITE_IMAGE_URL + "/" + auth.user.avatar);
             setErr("");
         } else {
             setErr("Failed to upload avatar");
