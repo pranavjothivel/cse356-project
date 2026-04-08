@@ -1,5 +1,4 @@
-import { useState, useContext } from "react";
-import AuthContext from "../auth";
+import { useState } from "react";
 import { apiFetch } from "../api";
 
 interface SearchResult {
@@ -21,8 +20,6 @@ interface Props {
 }
 
 export default function SearchModal({ scope, scopeId, onClose, onJumpTo }: Props) {
-    const { auth } = useContext(AuthContext);
-
     const [q, setQ] = useState("");
     const [authorFilter, setAuthorFilter] = useState("");
     const [after, setAfter] = useState("");
