@@ -1,25 +1,13 @@
 const multer = require('multer');
-const path = require('path');
-const crypto = require('crypto');
+const upload = multer({ storage: multer.memoryStorage() });
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, process.env.UPLOAD_DIR);
-  },
-  filename: function (req, file, cb) {
-    const name = crypto.randomUUID() + path.extname(file.originalname);
-    cb(null, name);
-  }
+const Minio = require('minio');
+const minioClient = new Minio.Client({
+  endPoint: process.env.MINIO_HOST,
+  port: 9000,
+  useSSL: process.env.NODE_ENV === 'production',
+  accessKey: process.env.MINIO_ACCESS_KEY,
+  secretKey: process.env.MINIO_SECRET_KEY
 });
 
-const fileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith('image/')) {
-    cb(null, true);
-  } else {
-    cb(null, false);
-  }
-}
-
-const upload = multer({ storage, fileFilter });
-
-module.exports = upload;
+module.exports = { upload, minioClient };
