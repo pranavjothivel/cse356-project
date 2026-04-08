@@ -9,6 +9,7 @@ import ProfileModal from "./ProfileModal";
 import CommunitySidebar from "./CommunitySidebar";
 import CommunityView from "./CommunityView";
 import "./Communities.css";
+import ConversationsPanel from "./ConversationsPanel";
 
 export default function HomeScreen() {
     const { auth } = useContext(AuthContext);
@@ -17,6 +18,7 @@ export default function HomeScreen() {
 
     const [modal, setModal] = useState<string>("");
     const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
+    const [view, setView] = useState<"home" | "dms">("home");
 
     const ws = useRef<WebSocket|null>(null);
 
@@ -54,6 +56,15 @@ export default function HomeScreen() {
                     }
                     else if (msg === "unaway") {
                         auth.setAway(false, true);
+                    }
+                    else {
+                        // JSON-encoded server events (message.created, etc.)
+                        try {
+                            const parsed = JSON.parse(msg);
+                            if (parsed && parsed.type) {
+                                window.dispatchEvent(new CustomEvent("ws-event", { detail: parsed }));
+                            }
+                        } catch { /* not JSON, ignore */ }
                     }
                 });
             })
@@ -114,16 +125,22 @@ export default function HomeScreen() {
         <div className="screen app-shell">
             <CommunitySidebar
                 selectedId={selectedCommunityId}
-                onSelect={setSelectedCommunityId}
+                onSelect={(id) => { setSelectedCommunityId(id); setView("home"); }}
             />
             <div className="main-content">
-                <div className="main-content-header" style={{justifyContent: "flex-end"}}>
+                <div className="main-content-header" style={{justifyContent: "space-between"}}>
+                    <div style={{display: "flex", gap: 12}}>
+                        <div className="cursorPtr" onClick={() => setView("home")}>Home</div>
+                        <div className="cursorPtr" onClick={() => setView("dms")}>Direct Messages</div>
+                    </div>
                     <div style={{display: "flex", gap: 12}}>
                         <div className="cursorPtr" onClick={() => {changeModal("profile")}}>Profile</div>
                         <div className="cursorPtr" onClick={logout}>Logout</div>
                     </div>
                 </div>
-                {selectedCommunityId ? (
+                {view === "dms" ? (
+                    <ConversationsPanel />
+                ) : selectedCommunityId ? (
                     <CommunityView communityId={selectedCommunityId} onLeft={() => setSelectedCommunityId(null)} />
                 ) : (
                     <div style={{flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#666"}}>

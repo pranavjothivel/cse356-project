@@ -22,4 +22,8 @@ export async function apiPatch(path: string, body?: any): Promise<Response> {
 
 export async function apiDelete(path: string): Promise<Response> {
   return apiFetch(path, { method: 'DELETE' });
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> ab54212 (part 5: Direct conversations)
