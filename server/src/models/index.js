@@ -3,6 +3,7 @@ const Community = require('./Community');
 const CommunityMember = require('./CommunityMember');
 const Channel = require('./Channel');
 const ChannelMember = require('./ChannelMember');
+const Message = require('./Message');
 
 // Community associations
 Community.belongsTo(User, { as: 'owner', foreignKey: 'owner_id' });
@@ -24,4 +25,8 @@ Channel.hasMany(ChannelMember, { foreignKey: 'channel_id', as: 'members' });
 ChannelMember.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 ChannelMember.belongsTo(Channel, { foreignKey: 'channel_id', as: 'channel' });
 
-module.exports = { User, Community, CommunityMember, Channel, ChannelMember };
+// Message associations
+Message.belongsTo(User, { foreignKey: 'author_id', as: 'author' });
+Message.belongsTo(Channel, { foreignKey: 'channel_id', as: 'channel' });
+
+module.exports = { User, Community, CommunityMember, Channel, ChannelMember, Message };

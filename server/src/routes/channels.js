@@ -1,5 +1,8 @@
 const { Router } = require('express');
-const { Channel, ChannelMember, CommunityMember, Community } = require('../models');
+const { Op } = require('sequelize');
+const { Channel, ChannelMember, CommunityMember, Community, User } = require('../models');
+const Message = require('../models/Message');
+const { broadcastToUsers } = require('../ws');
 
 const router = Router();
 
@@ -23,6 +26,45 @@ async function loadChannelAndCheckAdmin(req, res) {
     return null;
   }
   return { channel, membership };
+}
+
+// Middleware: require channel membership
+async function requireChannelMember(req, res, next) {
+  try {
+    const channel = await Channel.findByPk(req.params.channelId);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    const member = await ChannelMember.findOne({
+      where: { channel_id: channel.id, user_id: req.user.id },
+    });
+    if (!member) return res.status(403).json({ error: 'Not a channel member' });
+    req.channel = channel;
+    next();
+  } catch (err) { next(err); }
+}
+
+async function getChannelMemberIds(channelId) {
+  const members = await ChannelMember.findAll({
+    where: { channel_id: channelId },
+    attributes: ['user_id'],
+  });
+  return members.map(m => m.user_id);
+}
+
+function serializeChannelMessage(m) {
+  return {
+    id: m.id,
+    channelId: m.channel_id,
+    authorId: m.author_id,
+    author: m.author ? {
+      id: m.author.id,
+      username: m.author.username,
+      display_name: m.author.display_name,
+    } : null,
+    content: m.deleted_at ? null : m.content,
+    createdAt: m.created_at || m.createdAt,
+    editedAt: m.edited_at,
+    deletedAt: m.deleted_at,
+  };
 }
 
 // PATCH /:channelId — Update channel
@@ -97,6 +139,108 @@ router.post('/:channelId/leave', async (req, res, next) => {
 
     await member.destroy();
     res.json({ message: 'Left channel' });
+  } catch (err) { next(err); }
+});
+
+// GET /:channelId/messages — Fetch messages (cursor-based)
+router.get('/:channelId/messages', requireChannelMember, async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const where = { channel_id: req.channel.id };
+    if (req.query.before) {
+      const cursor = await Message.findByPk(req.query.before);
+      if (cursor) {
+        where[Op.or] = [
+          { created_at: { [Op.lt]: cursor.created_at } },
+          { created_at: cursor.created_at, id: { [Op.lt]: cursor.id } },
+        ];
+      }
+    }
+    const messages = await Message.findAll({
+      where,
+      include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
+      order: [['created_at', 'DESC'], ['id', 'DESC']],
+      limit,
+    });
+    res.json({ messages: messages.map(serializeChannelMessage) });
+  } catch (err) { next(err); }
+});
+
+// POST /:channelId/messages — Send a message
+router.post('/:channelId/messages', requireChannelMember, async (req, res, next) => {
+  try {
+    const { content } = req.body;
+    if (typeof content !== 'string' || content.length === 0) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    const msg = await Message.create({
+      channel_id: req.channel.id,
+      author_id: req.user.id,
+      content,
+    });
+    // Reload with author
+    const full = await Message.findByPk(msg.id, {
+      include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
+    });
+    const memberIds = await getChannelMemberIds(req.channel.id);
+    broadcastToUsers(memberIds, {
+      type: 'channel.message.created',
+      channelId: req.channel.id,
+      message: serializeChannelMessage(full),
+    });
+    res.status(201).json(serializeChannelMessage(full));
+  } catch (err) { next(err); }
+});
+
+// PATCH /:channelId/messages/:msgId — Edit a message
+router.patch('/:channelId/messages/:msgId', requireChannelMember, async (req, res, next) => {
+  try {
+    const { content } = req.body;
+    if (typeof content !== 'string' || content.length === 0) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    const msg = await Message.findOne({
+      where: { id: req.params.msgId, channel_id: req.channel.id },
+      include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
+    });
+    if (!msg) return res.status(404).json({ error: 'Not found' });
+    if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    if (msg.deleted_at) return res.status(400).json({ error: 'Cannot edit a deleted message' });
+
+    msg.content = content;
+    msg.edited_at = new Date();
+    await msg.save();
+
+    const memberIds = await getChannelMemberIds(req.channel.id);
+    broadcastToUsers(memberIds, {
+      type: 'channel.message.edited',
+      channelId: req.channel.id,
+      message: serializeChannelMessage(msg),
+    });
+    res.json(serializeChannelMessage(msg));
+  } catch (err) { next(err); }
+});
+
+// DELETE /:channelId/messages/:msgId — Soft delete a message
+router.delete('/:channelId/messages/:msgId', requireChannelMember, async (req, res, next) => {
+  try {
+    const msg = await Message.findOne({
+      where: { id: req.params.msgId, channel_id: req.channel.id },
+    });
+    if (!msg) return res.status(404).json({ error: 'Not found' });
+    if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    if (msg.deleted_at) return res.json({ message: 'Already deleted' });
+
+    msg.deleted_at = new Date();
+    await msg.save();
+
+    const memberIds = await getChannelMemberIds(req.channel.id);
+    broadcastToUsers(memberIds, {
+      type: 'channel.message.deleted',
+      channelId: req.channel.id,
+      messageId: msg.id,
+    });
+    res.json({ message: 'Deleted' });
   } catch (err) { next(err); }
 });
 

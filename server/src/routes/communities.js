@@ -1,6 +1,9 @@
 const { Router } = require('express');
+const { Op } = require('sequelize');
+const { UniqueConstraintError } = require('sequelize');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
 const redisClient = require('../redis');
+const { broadcastToUsers } = require('../ws');
 
 const router = Router();
 
@@ -20,7 +23,16 @@ router.post('/', async (req, res, next) => {
     const ownedCount = await Community.count({ where: { owner_id: req.user.id } });
     if (ownedCount >= 100) return res.status(403).json({ error: 'Cannot create more than 100 communities' });
 
-    const community = await Community.create({ name: name.trim(), owner_id: req.user.id });
+    const existing = await Community.findOne({ where: { name: name.trim() } });
+    if (existing) return res.status(409).json({ error: 'A community with this name already exists' });
+
+    let community;
+    try {
+      community = await Community.create({ name: name.trim(), owner_id: req.user.id });
+    } catch (err) {
+      if (err instanceof UniqueConstraintError) return res.status(409).json({ error: 'A community with this name already exists' });
+      throw err;
+    }
     await CommunityMember.create({ community_id: community.id, user_id: req.user.id, role: 'owner' });
 
     res.status(201).json({ community: { id: community.id, name: community.name, owner_id: community.owner_id, created_at: community.created_at } });
@@ -48,6 +60,35 @@ router.get('/', async (req, res, next) => {
     }));
 
     res.json({ communities });
+  } catch (err) { next(err); }
+});
+
+// GET /discover — List communities the user is not a member of
+router.get('/discover', async (req, res, next) => {
+  try {
+    const memberships = await CommunityMember.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['community_id'],
+    });
+    const memberIds = memberships.map(m => m.community_id);
+
+    const where = memberIds.length > 0 ? { id: { [Op.notIn]: memberIds } } : {};
+    if (req.query.search) {
+      where.name = { [Op.iLike]: `%${req.query.search}%` };
+    }
+
+    const communities = await Community.findAll({
+      where,
+      include: [{ model: User, as: 'owner', attributes: ['id', 'display_name', 'username'] }],
+      order: [['name', 'ASC']],
+    });
+
+    res.json({ communities: communities.map(c => ({
+      id: c.id,
+      name: c.name,
+      owner: c.owner,
+      created_at: c.created_at,
+    })) });
   } catch (err) { next(err); }
 });
 
@@ -140,6 +181,7 @@ router.post('/:communityId/leave', async (req, res, next) => {
     }
 
     await membership.destroy();
+    broadcastToUsers([req.user.id], { type: 'community.left', communityId: req.params.communityId });
     res.json({ message: 'Left community' });
   } catch (err) { next(err); }
 });
@@ -151,7 +193,14 @@ router.delete('/:communityId', async (req, res, next) => {
     if (!community) return res.status(404).json({ error: 'Community not found' });
     if (community.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can delete the community' });
 
+    const members = await CommunityMember.findAll({
+      where: { community_id: community.id },
+      attributes: ['user_id'],
+    });
+    const memberIds = members.map(m => m.user_id);
+
     await community.destroy();
+    broadcastToUsers(memberIds, { type: 'community.deleted', communityId: community.id });
     res.json({ message: 'Community deleted' });
   } catch (err) { next(err); }
 });

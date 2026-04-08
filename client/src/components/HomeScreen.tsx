@@ -125,7 +125,7 @@ export default function HomeScreen() {
         <div className="screen app-shell">
             <CommunitySidebar
                 selectedId={selectedCommunityId}
-                onSelect={(id) => { setSelectedCommunityId(id); setView("home"); }}
+                onSelect={(id) => { setSelectedCommunityId(id); if (id) setView("home"); }}
             />
             <div className="main-content">
                 <div className="main-content-header" style={{justifyContent: "space-between"}}>
