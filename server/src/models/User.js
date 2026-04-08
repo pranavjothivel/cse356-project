@@ -51,7 +51,7 @@ User.init({
   providers: { type: DataTypes.JSONB, defaultValue: [] },
   away: { type: DataTypes.BOOLEAN, defaultValue: false },
   away_msg: { type: DataTypes.STRING, defaultValue: "" },
-  avatar: { type: DataTypes.STRING, defaultValue: "1" }
+  avatar: { type: DataTypes.STRING, defaultValue: "1.png" }
 }, {
   sequelize,
   tableName: 'users',

@@ -1,4 +1,4 @@
-import { useState, useContext } from "react";
+import { useState, useEffect, useContext } from "react";
 
 import AuthContext from "../auth";
 
@@ -14,6 +14,10 @@ export default function ProfileModal({ closeCallback } : any) {
     const [pwDisplay, setPWDisplay] = useState<string>("");
 
     const [err, setErr] = useState("");
+
+    useEffect(() => {
+        setAvatarSrc(import.meta.env.VITE_IMAGE_URL + "/" + auth.user.avatar);
+    }, []);
 
     const handleClose = () => {
         closeCallback();

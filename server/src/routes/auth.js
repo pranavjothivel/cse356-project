@@ -3,9 +3,11 @@ const router = express.Router();
 const passport = require('passport');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const path = require('path');
 
 const User = require('../models/User');
-const upload = require('../upload');
+const { upload, minioClient } = require('../upload');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -275,10 +277,26 @@ router.post('/settings/avatar', requireAuth, upload.single('image'), async (req,
   if (!req.file) {
     return res.sendStatus(400);
   }
-  let filename = req.file.filename;
-  req.user.avatar = filename;
+  
+  const bucketName = "images";
+
+  const objectName = `${req.user.id}/${crypto.randomUUID() + path.extname(req.file.originalname)}`;
+
+  const exists = await minioClient.bucketExists(bucketName);
+  if (!exists) {
+    return res.sendStatus(500);
+  }
+
+  // Destroy current avatar if it is not the default ('1')
+  if (req.user.avatar !== '1') {
+    await minioClient.removeObject(bucketName, req.user.avatar);
+  }
+
+  await minioClient.putObject(bucketName, objectName, req.file.buffer);
+
+  req.user.avatar = objectName;
   req.user.save();
-  return res.json({filename});
+  return res.json({filename: objectName});
 });
 
 
