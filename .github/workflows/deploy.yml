@@ -119,3 +119,54 @@ jobs:
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
+
+  deploy-lb-configs:
+    name: Deploy LB configs (HAProxy + Nginx)
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for config changes
+        id: changes
+        run: |
+          git fetch origin main --depth=1
+          base=$(git merge-base HEAD origin/main)
+          haproxy=$(git diff --name-only "$base" HEAD -- infra/haproxy/haproxy.cfg | wc -l)
+          nginx=$(git diff --name-only "$base" HEAD -- infra/nginx/ | wc -l)
+          echo "haproxy=$( [ "$haproxy" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          echo "nginx=$( [ "$nginx" -gt 0 ] && echo true || echo false )"     >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH key
+        if: steps.changes.outputs.haproxy == 'true' || steps.changes.outputs.nginx == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Push HAProxy config
+        if: steps.changes.outputs.haproxy == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            infra/haproxy/haproxy.cfg \
+            root@${{ needs.setup.outputs.lb }}:/etc/haproxy/haproxy.cfg
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} \
+            "haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy"
+
+      - name: Push Nginx config
+        if: steps.changes.outputs.nginx == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            infra/nginx/nginx.conf \
+            root@${{ needs.setup.outputs.lb }}:/etc/nginx/nginx.conf
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            infra/nginx/sites-enabled/ \
+            root@${{ needs.setup.outputs.lb }}:/etc/nginx/sites-enabled/
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} \
+            "nginx -t && systemctl reload nginx"
