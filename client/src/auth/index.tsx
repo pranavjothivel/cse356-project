@@ -162,19 +162,28 @@ function AuthContextProvider(props: any) {
     }
 
     auth.changeAvatar = async (file: any) => {
+        // Step 1: upload the file
         const formData = new FormData();
         formData.append("image", file);
+        let uploadRes = await fetch(import.meta.env.VITE_BACKEND_URL + "/upload", {
+            method: "POST",
+            credentials: "include",
+            body: formData
+        });
+        if (!uploadRes.ok) return false;
+        const { url } = await uploadRes.json();
+
+        // Step 2: save the URL to the user's profile
         let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/avatar", {
-                    method: "POST",
-                    credentials: "include",
-                    body: formData
-                });
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ url })
+        });
         if (res.ok) {
-            let body = await res.json();
-            // Force re-render
             setAuth((prevState:any) => ({
                 ...prevState,
-                user: { ...prevState.user, avatar: body.filename },
+                user: { ...prevState.user, avatar: url },
                 loggedIn: prevState.loggedIn
             }));
             return true;

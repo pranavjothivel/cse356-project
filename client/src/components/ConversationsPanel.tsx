@@ -1,4 +1,5 @@
-import { useContext, useEffect, useState, useCallback } from "react";
+import { useContext, useEffect, useState, useCallback, useRef } from "react";
+import SearchModal from "./SearchModal";
 import AuthContext from "../auth";
 
 // Minimal direct-conversations UI. Sidebar lists conversations; main pane shows
@@ -63,6 +64,8 @@ export default function ConversationsPanel() {
     const [newParticipants, setNewParticipants] = useState("");
 
     const selected = conversations.find(c => c.id === selectedId) || null;
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [showSearch, setShowSearch] = useState(false);
 
     // Build a global id -> display label map from every conversation we know about,
     // so message author labels can show usernames instead of UUID prefixes.
@@ -98,6 +101,10 @@ export default function ConversationsPanel() {
         if (selectedId) loadMessages(selectedId);
         else setMessages([]);
     }, [selectedId, loadMessages]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
 
     // ---- WS event handling ------------------------------------------------
     useEffect(() => {
@@ -256,9 +263,9 @@ export default function ConversationsPanel() {
     const visible = conversations.filter(c => showHidden || !c.hidden);
 
     return (
-        <div style={{ display: "flex", border: "1px solid #ccc", marginTop: 16, height: 500 }}>
+        <div style={{ display: "flex", border: "1px solid #444", marginTop: 16, height: 500, background: "#1a1a1a" }}>
             {/* Sidebar */}
-            <div style={{ width: 280, borderRight: "1px solid #ccc", display: "flex", flexDirection: "column" }}>
+            <div style={{ width: 280, borderRight: "1px solid #444", background: "#1a1a1a", display: "flex", flexDirection: "column" }}>
                 <div style={{ padding: 8, borderBottom: "1px solid #eee", display: "flex", alignItems: "center", gap: 8 }}>
                     <strong style={{ flex: 1 }}>Conversations</strong>
                     <button
@@ -281,13 +288,13 @@ export default function ConversationsPanel() {
                             style={{
                                 padding: 8,
                                 cursor: "pointer",
-                                background: c.id === selectedId ? "#3a3a3a" : "transparent",
+                                background: c.id === selectedId ? "#3a3a3a" : "#1e1e1e",
                                 opacity: c.hidden ? 0.5 : 1,
-                                borderBottom: "1px solid #f0f0f0",
+                                borderBottom: "1px solid #333",
                             }}
                         >
-                            <div style={{ fontSize: 12, color: "#666" }}>{c.kind}{c.hidden ? " (hidden)" : ""}</div>
-                            <div style={{ fontSize: 12 }}>
+                            <div style={{ fontSize: 12, color: "#aaa" }}>{c.kind}{c.hidden ? " (hidden)" : ""}</div>
+                            <div style={{ fontSize: 12, color: "white" }}>
                                 {c.participants
                                     .filter(p => p.id !== myId)
                                     .map(p => p.username || p.displayName || p.id.slice(0, 8))
@@ -318,6 +325,7 @@ export default function ConversationsPanel() {
                             return (
                                 <div style={{ padding: 8, borderBottom: "1px solid #444", display: "flex", alignItems: "center", gap: 8 }}>
                                     <div style={{ flex: 1, fontWeight: "bold" }}>{label}</div>
+                                    <button onClick={() => setShowSearch(true)}>search</button>
                                     <button onClick={hideConversation}>hide</button>
                                 </div>
                             );
@@ -351,6 +359,7 @@ export default function ConversationsPanel() {
                                     </div>
                                 </div>
                             ))}
+                            <div ref={messagesEndRef} />
                         </div>
                         <div style={{ padding: 8, borderTop: "1px solid #444", background: "#2a2a2a", display: "flex", gap: 4 }}>
                             <input
@@ -395,8 +404,15 @@ export default function ConversationsPanel() {
                 )}
             </div>
 
+            {showSearch && selected && (
+                <SearchModal
+                    scope="conversation"
+                    scopeId={selected.id}
+                    onClose={() => setShowSearch(false)}
+                />
+            )}
             {error && (
-                <div style={{ position: "absolute", bottom: 8, right: 8, background: "#fee", padding: 8, fontSize: 12 }}>
+                <div style={{ position: "absolute", bottom: 8, right: 8, background: "#c0392b", color: "white", padding: 8, fontSize: 12, borderRadius: 4 }}>
                     {error} <button onClick={() => setError("")}>×</button>
                 </div>
             )}
