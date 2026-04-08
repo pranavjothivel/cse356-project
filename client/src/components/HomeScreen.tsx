@@ -6,6 +6,7 @@ import { useIdle } from "@uidotdev/usehooks";
 import AuthContext from "../auth";
 
 import ProfileModal from "./ProfileModal";
+import ConversationsPanel from "./ConversationsPanel";
 
 export default function HomeScreen() {
     const { auth } = useContext(AuthContext);
@@ -13,6 +14,7 @@ export default function HomeScreen() {
     const idle = useIdle(60000);
 
     const [modal, setModal] = useState<string>("");
+    const [view, setView] = useState<string>("home");
 
     const ws = useRef<WebSocket|null>(null);
 
@@ -50,6 +52,15 @@ export default function HomeScreen() {
                     }
                     else if (msg === "unaway") {
                         auth.setAway(false, true);
+                    }
+                    else {
+                        // JSON-encoded server events (message.created, etc.)
+                        try {
+                            const parsed = JSON.parse(msg);
+                            if (parsed && parsed.type) {
+                                window.dispatchEvent(new CustomEvent("ws-event", { detail: parsed }));
+                            }
+                        } catch { /* not JSON, ignore */ }
                     }
                 });
             })
@@ -109,9 +120,12 @@ export default function HomeScreen() {
     return (
         <div className="screen">
             <div style={{display: "flex"}}>
-                <div className="cursorPtr" onClick={() => {changeModal("profile")}}>Profile</div>
+                <div className="cursorPtr" onClick={() => {setView("home")}}>Home</div>
+                <div className="cursorPtr" style={{marginLeft: "16px"}} onClick={() => {changeModal("profile")}}>Profile</div>
+                <div className="cursorPtr" style={{marginLeft: "16px"}} onClick={() => {setView("dms")}}>Direct Messages</div>
                 <div className="cursorPtr" style={{marginLeft: "16px"}} onClick={logout}>Logout</div>
             </div>
+            {auth.loggedIn && view === "dms" && <ConversationsPanel />}
             {
                 modalContent
             }

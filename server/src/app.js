@@ -10,8 +10,13 @@ const WebSocket = require('ws');
 
 const sequelize = require('./db');
 require('./models/User'); // register model
+require('./models/Conversation');
+require('./models/ConversationParticipant');
+require('./models/Message');
 const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
+const conversationsRouter = require('./routes/conversations');
+const usersRouter = require('./routes/users');
 const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
@@ -55,6 +60,8 @@ app.use(passport.session());
 // Routes
 // ──────────────────────────────────────────────
 app.use('/api/auth', authRouter);
+app.use('/api/conversations', conversationsRouter);
+app.use('/api/users', usersRouter);
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });
