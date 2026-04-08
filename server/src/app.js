@@ -14,6 +14,8 @@ const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
 const communitiesRouter = require('./routes/communities');
 const channelsRouter = require('./routes/channels');
+const conversationsRouter = require('./routes/conversations');
+const usersRouter = require('./routes/users');
 const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
@@ -59,6 +61,8 @@ app.use(passport.session());
 app.use('/api/auth', authRouter);
 app.use('/api/communities', communitiesRouter);
 app.use('/api/channels', channelsRouter);
+app.use('/api/conversations', conversationsRouter);
+app.use('/api/users', usersRouter);
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });

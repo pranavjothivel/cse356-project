@@ -36,6 +36,10 @@ subClient.subscribe('messages', (msg) => {
         });
       }
     }
+    else if (msg.type === "fanout") {
+      // Generic per-user fanout published from any worker. Deliver locally only.
+      deliverLocal(msg.userIds, msg.payload);
+    }
 
   }
   catch (err) {
@@ -98,6 +102,35 @@ const connections = new Map();
   channels: channels_id -> { connId1: ws1, connId2: ws2, ... }
 */
 
+
+/**
+ * Deliver a payload to every local WS connection of the given user ids.
+ * Used by both the Redis fanout subscriber and the local-side of broadcastToUsers.
+ */
+function deliverLocal(userIds, payload) {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  for (const userId of userIds) {
+    const conns = users.get(userId);
+    if (!conns) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+    }
+  }
+}
+
+/**
+ * Fan out a JSON payload to all sessions of the given user ids, across every
+ * server in the cluster. Use this from REST handlers when a write needs to
+ * push a real-time update (message.created, conversation.participants_changed, ...).
+ */
+function broadcastToUsers(userIds, payload) {
+  if (!userIds || userIds.length === 0) return;
+  deliverLocal(userIds, payload);
+  redisClient.publish('messages', JSON.stringify({
+    serverId,
+    msg: { type: 'fanout', userIds, payload },
+  }));
+}
 
 const configureWSServer = (wss) => {
   wss.on('connection', async (ws, req) => {
@@ -250,4 +283,4 @@ const configureWSServer = (wss) => {
   });
 }
 
-module.exports = { configureWSServer }
+module.exports = { configureWSServer, broadcastToUsers };
