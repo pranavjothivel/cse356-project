@@ -441,8 +441,8 @@ router.post('/:id/read', requireAuth, requireMember, async (req, res, next) => {
     if (req.participant.last_read_message_id) {
       const current = await Message.findByPk(req.participant.last_read_message_id);
       if (current) {
-        const currentTs = current.created_at.getTime();
-        const newTs = msg.created_at.getTime();
+        const currentTs = current.createdAt.getTime();
+        const newTs = msg.createdAt.getTime();
         if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
           return res.json({ lastReadMessageId: req.participant.last_read_message_id });
         }

@@ -222,8 +222,8 @@ router.post('/:channelId/read', requireChannelMember, async (req, res, next) => 
     if (member.last_read_message_id) {
       const current = await Message.findByPk(member.last_read_message_id);
       if (current) {
-        const currentTs = current.created_at.getTime();
-        const newTs = msg.created_at.getTime();
+        const currentTs = current.createdAt.getTime();
+        const newTs = msg.createdAt.getTime();
         if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
           return res.json({ lastReadMessageId: member.last_read_message_id });
         }
