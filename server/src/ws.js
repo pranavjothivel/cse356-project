@@ -42,6 +42,16 @@ subClient.subscribe('messages', (msg) => {
       // Generic per-user fanout published from any worker. Deliver locally only.
       deliverLocal(msg.userIds, msg.payload);
     }
+    else if (msg.type === "fanout_all") {
+      // Broadcast payload to every locally connected user (optionally excluding one).
+      const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
+      for (const [uid, conns] of users.entries()) {
+        if (msg.excludeUserId && uid === msg.excludeUserId) continue;
+        for (const cid of Object.keys(conns)) {
+          try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+        }
+      }
+    }
 
   }
   catch (err) {
@@ -134,6 +144,27 @@ function broadcastToUsers(userIds, payload) {
   }));
 }
 
+/**
+ * Fan out a JSON payload to every currently connected WS session across the cluster.
+ * Used for presence.changed — we want any connected user to observe presence transitions,
+ * regardless of whether they share a community or DM with the subject.
+ */
+function broadcastToAllConnected(payload, { excludeUserId } = {}) {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  // Local delivery
+  for (const [uid, conns] of users.entries()) {
+    if (uid === excludeUserId) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+    }
+  }
+  // Cross-server fanout
+  redisClient.publish('messages', JSON.stringify({
+    serverId,
+    msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
+  }));
+}
+
 async function getCoCommunityUserIds(userId) {
   const myCommunities = await CommunityMember.findAll({
     where: { user_id: userId },
@@ -209,14 +240,13 @@ const configureWSServer = (wss) => {
             }));
           }
 
-          // Broadcast to co-community users whenever final presence actually changed
+          // Broadcast to all connected users whenever final presence actually changed
           if (finalPresence !== prevFinalPresence) {
-            const coCommunityUserIds = await getCoCommunityUserIds(id);
-            broadcastToUsers(coCommunityUserIds, {
+            broadcastToAllConnected({
               type: 'presence.changed',
               userId: id,
               presence: finalPresence,
-            });
+            }, { excludeUserId: id });
           }
         }
 
@@ -239,13 +269,12 @@ const configureWSServer = (wss) => {
           // Last connection — user is now offline
           await redisClient.del(`users:${id}`);
           users.delete(id);
-          // Broadcast offline to co-community users
-          const coCommunityUserIds = await getCoCommunityUserIds(id);
-          broadcastToUsers(coCommunityUserIds, {
+          // Broadcast offline to all connected users
+          broadcastToAllConnected({
             type: 'presence.changed',
             userId: id,
             presence: 'offline',
-          });
+          }, { excludeUserId: id });
         }
         else {
           delete redisUser.conns[connId];
@@ -262,12 +291,11 @@ const configureWSServer = (wss) => {
           // Broadcast if presence changed (e.g. the closing tab was the only online one)
           if (finalPresence !== redisUser.presence) {
             redisUser.presence = finalPresence;
-            const coCommunityUserIds = await getCoCommunityUserIds(id);
-            broadcastToUsers(coCommunityUserIds, {
+            broadcastToAllConnected({
               type: 'presence.changed',
               userId: id,
               presence: finalPresence,
-            });
+            }, { excludeUserId: id });
           }
 
           redisUser.presence = finalPresence;
@@ -321,4 +349,4 @@ const configureWSServer = (wss) => {
   });
 }
 
-module.exports = { configureWSServer, broadcastToUsers, getCoCommunityUserIds };
+module.exports = { configureWSServer, broadcastToUsers, broadcastToAllConnected, getCoCommunityUserIds };
