@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState, useCallback, useRef } from "react";
+import React, { useContext, useEffect, useState, useCallback, useRef } from "react";
 import SearchModal from "./SearchModal";
 import AuthContext from "../auth";
 
@@ -46,12 +46,16 @@ async function api(path: string, opts: RequestInit = {}) {
     return res.json();
 }
 
-export default function ConversationsPanel() {
+interface Props {
+    unreadConvIds: Set<string>;
+    setUnreadConvIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+}
+
+export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: Props) {
     const { auth } = useContext(AuthContext);
     const myId: string | undefined = auth.user?.id;
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
-    const [unreadConvIds, setUnreadConvIds] = useState<Set<string>>(new Set());
     const [showHidden, setShowHidden] = useState(false);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
@@ -175,9 +179,6 @@ export default function ConversationsPanel() {
                 case "message.created":
                     if (ev.conversationId === selectedId) {
                         setMessages(prev => prev.some(m => m.id === ev.message.id) ? prev : [...prev, ev.message]);
-                    } else if (ev.message.authorId !== myId) {
-                        // New message in a conversation we're not viewing — mark unread
-                        setUnreadConvIds(prev => new Set(prev).add(ev.conversationId));
                     }
                     // Server un-hides for everyone on a new message — reflect that locally
                     setConversations(prev => prev.map(c =>

@@ -19,6 +19,7 @@ export default function HomeScreen() {
     const [modal, setModal] = useState<string>("");
     const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
     const [view, setView] = useState<"home" | "dms">("home");
+    const [unreadConvIds, setUnreadConvIds] = useState<Set<string>>(new Set());
 
     const ws = useRef<WebSocket|null>(null);
 
@@ -62,6 +63,11 @@ export default function HomeScreen() {
                         try {
                             const parsed = JSON.parse(msg);
                             if (parsed && parsed.type) {
+                                // Track unread DMs at the top level so the dot shows even when
+                                // ConversationsPanel is not mounted (user is on another view)
+                                if (parsed.type === 'message.created' && parsed.message?.authorId !== auth.user?.id) {
+                                    setUnreadConvIds(prev => new Set(prev).add(parsed.conversationId));
+                                }
                                 window.dispatchEvent(new CustomEvent("ws-event", { detail: parsed }));
                             }
                         } catch { /* not JSON, ignore */ }
@@ -131,7 +137,12 @@ export default function HomeScreen() {
                 <div className="main-content-header" style={{justifyContent: "space-between"}}>
                     <div style={{display: "flex", gap: 12}}>
                         <div className="cursorPtr" onClick={() => setView("home")}>Home</div>
-                        <div className="cursorPtr" onClick={() => setView("dms")}>Direct Messages</div>
+                        <div className="cursorPtr" onClick={() => setView("dms")} style={{ position: "relative" }}>
+                            Direct Messages
+                            {unreadConvIds.size > 0 && (
+                                <span style={{ position: "absolute", top: -4, right: -10, width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block" }} />
+                            )}
+                        </div>
                     </div>
                     <div style={{display: "flex", gap: 12}}>
                         <div className="cursorPtr" onClick={() => {changeModal("profile")}}>Profile</div>
@@ -139,7 +150,7 @@ export default function HomeScreen() {
                     </div>
                 </div>
                 {view === "dms" ? (
-                    <ConversationsPanel />
+                    <ConversationsPanel unreadConvIds={unreadConvIds} setUnreadConvIds={setUnreadConvIds} />
                 ) : selectedCommunityId ? (
                     <CommunityView communityId={selectedCommunityId} onLeft={() => setSelectedCommunityId(null)} />
                 ) : (
