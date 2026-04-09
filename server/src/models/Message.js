@@ -26,6 +26,8 @@ Message.init({
     { fields: ['author_id'] },
     // GIN index for full-text search on message content
     { fields: [sequelize.literal("to_tsvector('english', content)")], using: 'GIN', name: 'messages_content_fts_idx' },
+    // GIN trigram index for unicode-safe substring search (used by ILIKE queries)
+    { fields: [sequelize.literal('content')], using: 'GIN', name: 'messages_content_trgm_idx' },
   ],
 });
 
