@@ -188,7 +188,59 @@ router.post('/:channelId/messages', requireChannelMember, async (req, res, next)
       channelId: req.channel.id,
       message: serializeChannelMessage(full),
     });
+
+    // Notify all other members they have unread messages in this channel
+    const otherMemberIds = memberIds.filter(id => id !== req.user.id);
+    if (otherMemberIds.length > 0) {
+      broadcastToUsers(otherMemberIds, {
+        type: 'channel.unread',
+        channelId: req.channel.id,
+      });
+    }
+
     res.status(201).json(serializeChannelMessage(full));
+  } catch (err) { next(err); }
+});
+
+// POST /:channelId/read — Mark channel as read up to a message
+router.post('/:channelId/read', requireChannelMember, async (req, res, next) => {
+  try {
+    const { messageId } = req.body;
+    if (!messageId) return res.status(400).json({ error: 'messageId is required' });
+
+    const msg = await Message.findOne({
+      where: { id: messageId, channel_id: req.channel.id },
+    });
+    if (!msg) return res.status(404).json({ error: 'Message not found in this channel' });
+
+    const member = await ChannelMember.findOne({
+      where: { channel_id: req.channel.id, user_id: req.user.id },
+    });
+    if (!member) return res.status(403).json({ error: 'Not a channel member' });
+
+    // Only advance forward
+    if (member.last_read_message_id) {
+      const current = await Message.findByPk(member.last_read_message_id);
+      if (current) {
+        const currentTs = current.created_at.getTime();
+        const newTs = msg.created_at.getTime();
+        if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
+          return res.json({ lastReadMessageId: member.last_read_message_id });
+        }
+      }
+    }
+
+    member.last_read_message_id = messageId;
+    await member.save();
+
+    // Tell only this user's sessions that this channel is now read
+    broadcastToUsers([req.user.id], {
+      type: 'channel.read',
+      channelId: req.channel.id,
+      lastReadMessageId: messageId,
+    });
+
+    res.json({ lastReadMessageId: messageId });
   } catch (err) { next(err); }
 });
 

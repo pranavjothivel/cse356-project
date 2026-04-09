@@ -7,6 +7,7 @@ interface ChannelInfo {
   name: string;
   is_private: boolean;
   is_joined: boolean;
+  hasUnread?: boolean;
 }
 
 interface Props {
@@ -42,7 +43,10 @@ export default function ChannelList({ communityId, channels, userRole, selectedI
           onClick={() => c.is_joined && onSelect(c.id)}
         >
           {c.is_private && <span className="lock-icon">&#128274;</span>}
-          <span style={{ opacity: c.is_joined ? 1 : 0.5 }}>{c.name}</span>
+          <span style={{ opacity: c.is_joined ? 1 : 0.5, fontWeight: c.hasUnread ? 700 : undefined }}>{c.name}</span>
+          {c.hasUnread && selectedId !== c.id && (
+            <span style={{ marginLeft: 4, width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block", flexShrink: 0 }} />
+          )}
           {!c.is_joined && (
             <button className="join-btn" onClick={(e) => { e.stopPropagation(); handleJoin(c.id); }}>Join</button>
           )}

@@ -51,6 +51,7 @@ export default function ConversationsPanel() {
     const myId: string | undefined = auth.user?.id;
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [unreadConvIds, setUnreadConvIds] = useState<Set<string>>(new Set());
     const [showHidden, setShowHidden] = useState(false);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
@@ -174,6 +175,9 @@ export default function ConversationsPanel() {
                 case "message.created":
                     if (ev.conversationId === selectedId) {
                         setMessages(prev => prev.some(m => m.id === ev.message.id) ? prev : [...prev, ev.message]);
+                    } else if (ev.message.authorId !== myId) {
+                        // New message in a conversation we're not viewing — mark unread
+                        setUnreadConvIds(prev => new Set(prev).add(ev.conversationId));
                     }
                     // Server un-hides for everyone on a new message — reflect that locally
                     setConversations(prev => prev.map(c =>
@@ -332,7 +336,7 @@ export default function ConversationsPanel() {
                     {visible.map(c => (
                         <div
                             key={c.id}
-                            onClick={() => setSelectedId(c.id)}
+                            onClick={() => { setSelectedId(c.id); setUnreadConvIds(prev => { const s = new Set(prev); s.delete(c.id); return s; }); }}
                             style={{
                                 padding: 8,
                                 cursor: "pointer",
@@ -342,11 +346,16 @@ export default function ConversationsPanel() {
                             }}
                         >
                             <div style={{ fontSize: 12, color: "#aaa" }}>{c.kind}{c.hidden ? " (hidden)" : ""}</div>
-                            <div style={{ fontSize: 12, color: "white" }}>
-                                {c.participants
-                                    .filter(p => p.id !== myId)
-                                    .map(p => p.username || p.displayName || p.id.slice(0, 8))
-                                    .join(", ") || "(self)"}
+                            <div style={{ fontSize: 12, color: "white", display: "flex", alignItems: "center", gap: 4 }}>
+                                <span style={{ fontWeight: unreadConvIds.has(c.id) ? 700 : undefined }}>
+                                    {c.participants
+                                        .filter(p => p.id !== myId)
+                                        .map(p => p.username || p.displayName || p.id.slice(0, 8))
+                                        .join(", ") || "(self)"}
+                                </span>
+                                {unreadConvIds.has(c.id) && (
+                                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block", flexShrink: 0 }} />
+                                )}
                             </div>
                             {c.hidden && (
                                 <button

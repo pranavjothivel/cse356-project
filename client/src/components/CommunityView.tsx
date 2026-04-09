@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiFetch, apiPost, apiDelete } from "../api";
 import ChannelList from "./ChannelList";
 import ChannelView from "./ChannelView";
@@ -10,6 +10,7 @@ interface ChannelInfo {
   name: string;
   is_private: boolean;
   is_joined: boolean;
+  hasUnread?: boolean;
 }
 
 interface CommunityData {
@@ -28,19 +29,40 @@ export default function CommunityView({ communityId, onLeft }: Props) {
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     const res = await apiFetch(`/communities/${communityId}`);
     if (res.ok) {
       const d = await res.json();
       setData(d);
     }
-  };
+  }, [communityId]);
 
   useEffect(() => {
     setData(null);
     setSelectedChannelId(null);
     fetchData();
-  }, [communityId]);
+  }, [communityId, fetchData]);
+
+  // Handle real-time unread/read updates for channels
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = (e as CustomEvent).detail;
+      if (!ev?.type) return;
+      if (ev.type === 'channel.unread') {
+        setData(prev => prev ? {
+          ...prev,
+          channels: prev.channels.map(c => c.id === ev.channelId ? { ...c, hasUnread: true } : c),
+        } : prev);
+      } else if (ev.type === 'channel.read') {
+        setData(prev => prev ? {
+          ...prev,
+          channels: prev.channels.map(c => c.id === ev.channelId ? { ...c, hasUnread: false } : c),
+        } : prev);
+      }
+    };
+    window.addEventListener('ws-event', handler);
+    return () => window.removeEventListener('ws-event', handler);
+  }, []);
 
   if (!data) return <div className="channel-view"><p className="placeholder-text">Loading...</p></div>;
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext, useRef } from "react";
+import { useState, useEffect, useContext, useRef, useCallback } from "react";
 import { apiFetch, apiPost, apiPatch, apiDelete } from "../api";
 import AuthContext from "../auth";
 
@@ -42,6 +42,16 @@ export default function ChannelView({ channelId, channelName }: Props) {
   const [editDraft, setEditDraft] = useState("");
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const markAsRead = useCallback((msgId: string) => {
+    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    markReadTimerRef.current = setTimeout(async () => {
+      try {
+        await apiPost(`/channels/${channelId}/read`, { messageId: msgId });
+      } catch { /* non-critical */ }
+    }, 500);
+  }, [channelId]);
 
   // Load messages on channel change
   useEffect(() => {
@@ -53,16 +63,24 @@ export default function ChannelView({ channelId, channelName }: Props) {
       if (res.ok) {
         const data = await res.json();
         // Server returns newest-first; reverse for chronological display
-        setMessages(data.messages.slice().reverse());
+        const msgs = data.messages.slice().reverse();
+        setMessages(msgs);
+        if (msgs.length > 0) markAsRead(msgs[msgs.length - 1].id);
       }
     };
     load();
-  }, [channelId]);
+  }, [channelId, markAsRead]);
 
   // Scroll to bottom when messages load or new message arrives
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-mark as read when new messages arrive while viewing
+  useEffect(() => {
+    if (messages.length === 0) return;
+    markAsRead(messages[messages.length - 1].id);
+  }, [messages, markAsRead]);
 
   // WS real-time updates
   useEffect(() => {
