@@ -423,8 +423,62 @@ router.delete('/:id/participants/me', requireAuth, requireMember, async (req, re
 });
 
 // ──────────────────────────────────────────────
-// Hide / unhide (1:1 DMs only — they can't be deleted)
+// Read receipts
 // ──────────────────────────────────────────────
+
+// POST /api/conversations/:id/read  { messageId }
+router.post('/:id/read', requireAuth, requireMember, async (req, res, next) => {
+  try {
+    const { messageId } = req.body;
+    if (!messageId) return res.status(400).json({ error: 'messageId is required' });
+
+    const msg = await Message.findOne({
+      where: { id: messageId, conversation_id: req.conversation.id },
+    });
+    if (!msg) return res.status(404).json({ error: 'Message not found in this conversation' });
+
+    // Only advance forward — don't allow marking an older message as last-read
+    if (req.participant.last_read_message_id) {
+      const current = await Message.findByPk(req.participant.last_read_message_id);
+      if (current) {
+        const currentTs = current.created_at.getTime();
+        const newTs = msg.created_at.getTime();
+        if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
+          return res.json({ lastReadMessageId: req.participant.last_read_message_id });
+        }
+      }
+    }
+
+    req.participant.last_read_message_id = messageId;
+    await req.participant.save();
+
+    const parts = await listParticipants(req.conversation.id);
+    broadcastToUsers(parts.map(p => p.userId), {
+      type: 'conversation.read',
+      conversationId: req.conversation.id,
+      userId: req.user.id,
+      lastReadMessageId: messageId,
+    });
+
+    res.json({ lastReadMessageId: messageId });
+  } catch (err) { next(err); }
+});
+
+// GET /api/conversations/:id/read-state
+router.get('/:id/read-state', requireAuth, requireMember, async (req, res, next) => {
+  try {
+    const rows = await ConversationParticipant.findAll({
+      where: { conversation_id: req.conversation.id },
+      attributes: ['user_id', 'last_read_message_id'],
+    });
+    res.json({
+      readState: rows.map(r => ({
+        userId: r.user_id,
+        lastReadMessageId: r.last_read_message_id,
+      })),
+    });
+  } catch (err) { next(err); }
+});
 
 // POST /api/conversations/:id/hide
 router.post('/:id/hide', requireAuth, requireMember, async (req, res, next) => {

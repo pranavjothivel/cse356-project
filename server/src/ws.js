@@ -1,7 +1,9 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
+const { Op } = require('sequelize');
 const User = require('./models/User');
+const CommunityMember = require('./models/CommunityMember');
 const redisClient = require('./redis');
 
 // Identifier that should be sent when publishing through Redis
@@ -32,7 +34,7 @@ subClient.subscribe('messages', (msg) => {
       }
       else if (msg.value === "unaway") {
         Object.keys(conns).forEach((k) => {
-          conns[k].send("away");
+          conns[k].send("unaway");
         });
       }
     }
@@ -132,6 +134,22 @@ function broadcastToUsers(userIds, payload) {
   }));
 }
 
+async function getCoCommunityUserIds(userId) {
+  const myCommunities = await CommunityMember.findAll({
+    where: { user_id: userId },
+    attributes: ['community_id'],
+    raw: true,
+  });
+  if (myCommunities.length === 0) return [];
+  const communityIds = myCommunities.map(r => r.community_id);
+  const coMembers = await CommunityMember.findAll({
+    where: { community_id: communityIds, user_id: { [Op.ne]: userId } },
+    attributes: ['user_id'],
+    raw: true,
+  });
+  return [...new Set(coMembers.map(r => r.user_id))];
+}
+
 const configureWSServer = (wss) => {
   wss.on('connection', async (ws, req) => {
     let connId = crypto.randomUUID();
@@ -185,16 +203,23 @@ const configureWSServer = (wss) => {
 
           await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Clients are only notified if away or unaway was sent
+          // Sync user's own other sessions (cross-server)
           if (newPresence === "away" || newPresence === "unaway") {
-            redisClient.publish("messages", JSON.stringify({ 
-              serverId, 
+            redisClient.publish("messages", JSON.stringify({
+              serverId,
               msg: {
                 id,
                 type: msg.type,
                 value: msg.value
               }
             }));
+            // Broadcast presence change to all users sharing a community
+            const coCommunityUserIds = await getCoCommunityUserIds(id);
+            broadcastToUsers(coCommunityUserIds, {
+              type: 'presence.changed',
+              userId: id,
+              presence: finalPresence,
+            });
           }
         }
 

@@ -66,6 +66,9 @@ export default function ConversationsPanel() {
     const selected = conversations.find(c => c.id === selectedId) || null;
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [showSearch, setShowSearch] = useState(false);
+    // userId -> lastReadMessageId for the selected conversation
+    const [readState, setReadState] = useState<Map<string, string | null>>(new Map());
+    const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Build a global id -> display label map from every conversation we know about,
     // so message author labels can show usernames instead of UUID prefixes.
@@ -93,18 +96,53 @@ export default function ConversationsPanel() {
         } catch (err: any) { setError(err.message); }
     }, []);
 
+    const loadReadState = useCallback(async (convId: string) => {
+        try {
+            const body = await api(`/conversations/${convId}/read-state`);
+            const map = new Map<string, string | null>();
+            for (const entry of body.readState) {
+                map.set(entry.userId, entry.lastReadMessageId);
+            }
+            setReadState(map);
+        } catch { /* non-critical */ }
+    }, []);
+
+    const markAsRead = useCallback((convId: string, messageId: string) => {
+        if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+        markReadTimerRef.current = setTimeout(async () => {
+            try {
+                await api(`/conversations/${convId}/read`, {
+                    method: 'POST',
+                    body: JSON.stringify({ messageId }),
+                });
+            } catch { /* non-critical */ }
+        }, 500);
+    }, []);
+
     useEffect(() => {
         if (auth.loggedIn) loadConversations();
     }, [auth.loggedIn, loadConversations]);
 
     useEffect(() => {
-        if (selectedId) loadMessages(selectedId);
-        else setMessages([]);
-    }, [selectedId, loadMessages]);
+        if (selectedId) {
+            loadMessages(selectedId);
+            loadReadState(selectedId);
+        } else {
+            setMessages([]);
+            setReadState(new Map());
+        }
+    }, [selectedId, loadMessages, loadReadState]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
+
+    // Auto-mark as read when viewing a conversation with messages
+    useEffect(() => {
+        if (!selectedId || messages.length === 0) return;
+        const lastMsg = messages[messages.length - 1];
+        markAsRead(selectedId, lastMsg.id);
+    }, [selectedId, messages, markAsRead]);
 
     // ---- WS event handling ------------------------------------------------
     useEffect(() => {
@@ -156,6 +194,16 @@ export default function ConversationsPanel() {
                                 ? { ...m, content: null, deletedAt: new Date().toISOString() }
                                 : m
                         ));
+                    }
+                    break;
+
+                case "conversation.read":
+                    if (ev.conversationId === selectedId) {
+                        setReadState(prev => {
+                            const next = new Map(prev);
+                            next.set(ev.userId, ev.lastReadMessageId);
+                            return next;
+                        });
                     }
                     break;
             }
@@ -331,34 +379,47 @@ export default function ConversationsPanel() {
                             );
                         })()}
                         <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
-                            {messages.map(m => (
-                                <div key={m.id} style={{ marginBottom: 6, fontSize: 13 }}>
-                                    <span style={{ color: "#888", fontSize: 11 }}>
-                                        {userLabel(m.authorId)} · {new Date(m.createdAt).toLocaleTimeString()}
-                                        {m.editedAt && " (edited)"}
-                                    </span>
-                                    <div>
-                                        {m.deletedAt
-                                            ? <em style={{ color: "#aaa" }}>[deleted]</em>
-                                            : editingId === m.id
-                                                ? (
-                                                    <span>
-                                                        <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
-                                                        <button onClick={saveEdit}>save</button>
-                                                        <button onClick={() => setEditingId(null)}>cancel</button>
-                                                    </span>
-                                                )
-                                                : m.content
-                                        }
-                                        {!m.deletedAt && editingId !== m.id && m.authorId === myId && (
-                                            <span style={{ marginLeft: 8 }}>
-                                                <button style={{ fontSize: 10 }} onClick={() => startEdit(m)}>edit</button>
-                                                <button style={{ fontSize: 10 }} onClick={() => deleteMessage(m)}>delete</button>
-                                            </span>
+                            {messages.map(m => {
+                                // Collect readers (other users) whose lastReadMessageId === this message
+                                const readers = selected
+                                    ? selected.participants
+                                        .filter(p => p.id !== myId && readState.get(p.id) === m.id)
+                                        .map(p => p.username || p.displayName || p.id.slice(0, 8))
+                                    : [];
+                                return (
+                                    <div key={m.id} style={{ marginBottom: 6, fontSize: 13 }}>
+                                        <span style={{ color: "#888", fontSize: 11 }}>
+                                            {userLabel(m.authorId)} · {new Date(m.createdAt).toLocaleTimeString()}
+                                            {m.editedAt && " (edited)"}
+                                        </span>
+                                        <div>
+                                            {m.deletedAt
+                                                ? <em style={{ color: "#aaa" }}>[deleted]</em>
+                                                : editingId === m.id
+                                                    ? (
+                                                        <span>
+                                                            <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
+                                                            <button onClick={saveEdit}>save</button>
+                                                            <button onClick={() => setEditingId(null)}>cancel</button>
+                                                        </span>
+                                                    )
+                                                    : m.content
+                                            }
+                                            {!m.deletedAt && editingId !== m.id && m.authorId === myId && (
+                                                <span style={{ marginLeft: 8 }}>
+                                                    <button style={{ fontSize: 10 }} onClick={() => startEdit(m)}>edit</button>
+                                                    <button style={{ fontSize: 10 }} onClick={() => deleteMessage(m)}>delete</button>
+                                                </span>
+                                            )}
+                                        </div>
+                                        {readers.length > 0 && (
+                                            <div style={{ fontSize: 10, color: "#6a9f6a", marginTop: 1 }}>
+                                                Read by {readers.join(", ")}
+                                            </div>
                                         )}
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                             <div ref={messagesEndRef} />
                         </div>
                         <div style={{ padding: 8, borderTop: "1px solid #444", background: "#2a2a2a", display: "flex", gap: 4 }}>
