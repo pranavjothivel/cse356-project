@@ -81,7 +81,7 @@ export default function CommunityView({ communityId, onLeft }: Props) {
           onRefresh={fetchData}
         />
         {selectedChannel && selectedChannel.is_joined ? (
-          <ChannelView channelId={selectedChannel.id} channelName={selectedChannel.name} />
+          <ChannelView channelId={selectedChannel.id} channelName={selectedChannel.name} communityId={communityId} />
         ) : (
           <div className="channel-view">
             <p className="placeholder-text">Select a channel</p>

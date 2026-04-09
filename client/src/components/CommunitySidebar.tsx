@@ -11,7 +11,7 @@ interface CommunityInfo {
 
 interface Props {
   selectedId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
 }
 
 export default function CommunitySidebar({ selectedId, onSelect }: Props) {
@@ -29,6 +29,20 @@ export default function CommunitySidebar({ selectedId, onSelect }: Props) {
   useEffect(() => {
     fetchCommunities();
   }, []);
+
+  // Remove deleted/left communities in real-time
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = (e as CustomEvent).detail;
+      if (!ev?.type) return;
+      if (ev.type === "community.deleted" || ev.type === "community.left") {
+        setCommunities((prev) => prev.filter((c) => c.id !== ev.communityId));
+        if (selectedId === ev.communityId) onSelect(null);
+      }
+    };
+    window.addEventListener("ws-event", handler);
+    return () => window.removeEventListener("ws-event", handler);
+  }, [selectedId, onSelect]);
 
   return (
     <div className="sidebar-left">
