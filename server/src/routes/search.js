@@ -31,9 +31,9 @@ router.get('/', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: "scope must be 'community' or 'conversation'" });
     }
 
-    // Build the plainto_tsquery expression — plainto_tsquery handles plain text
-    // without requiring the caller to know tsquery syntax.
-    const bindings = [q.trim()];
+    // Use ILIKE with a pg_trgm GIN index — handles partial words and all
+    // unicode scripts (CJK, emoji, RTL) unlike to_tsvector which is English-only.
+    const bindings = [`%${q.trim()}%`];
     let scopeClause;
 
     if (scope === 'community') {
@@ -99,9 +99,6 @@ router.get('/', requireAuth, async (req, res, next) => {
       extraClauses.push(`m.created_at <= $${bindings.length}`);
     }
 
-    bindings.push(limit);
-    const limitClause = `$${bindings.length}`;
-
     const extraWhere = extraClauses.length > 0 ? `AND ${extraClauses.join(' AND ')}` : '';
 
     const rows = await sequelize.query(
@@ -119,10 +116,10 @@ router.get('/', requireAuth, async (req, res, next) => {
        JOIN users u ON u.id = m.author_id
        WHERE m.deleted_at IS NULL
          AND ${scopeClause}
-         AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $1)
+         AND m.content ILIKE $1
          ${extraWhere}
        ORDER BY m.created_at DESC
-       LIMIT ${limitClause}`,
+       LIMIT ${limit}`,
       { bind: bindings, type: QueryTypes.SELECT }
     );
 
