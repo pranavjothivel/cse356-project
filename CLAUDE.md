@@ -39,7 +39,7 @@ PORT=                  # defaults to 3000
 
 **Stack:** Node.js + Express 5, PostgreSQL via Sequelize ORM, Passport.js for auth, sessions stored in Postgres via `connect-pg-simple`.
 
-**Entry point:** `src/app.js` — bootstraps middleware, mounts routes, syncs DB, then starts the server. `sequelize.sync({ alter: true })` is used (migrations not yet set up).
+**Entry point:** `src/app.js` — bootstraps middleware, mounts routes, syncs DB, then starts the server. `sequelize.sync()` runs with `alter: true` in non-production only (it's disabled in production because Sequelize's alter algorithm re-adds unique indexes on every boot). Production schema changes go in `server/scripts/migrations/` and are applied manually — see the README there.
 
 **Auth system (`src/auth/passport.js`, `src/routes/auth.js`):**
 - Four strategies: Local, Google OAuth2, GitHub OAuth2, Course OIDC (Keycloak via `openid-client`)

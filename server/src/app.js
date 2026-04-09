@@ -79,14 +79,32 @@ app.use((err, req, res, next) => {
 });
 
 // ──────────────────────────────────────────────
+// Process-level error handlers
+// ──────────────────────────────────────────────
+// Last-resort safety net: any uncaught exception or unhandled rejection in a
+// background handler (WS connection, Redis subscriber, timer callback, etc.)
+// is logged and swallowed so PM2 does not crash-loop the worker. Route-level
+// errors should still be caught by try/catch and the Express error middleware
+// above; this is only for errors that escape those boundaries.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
+// ──────────────────────────────────────────────
 // Start
 // ──────────────────────────────────────────────
 async function start() {
   await sequelize.authenticate();
   console.log('PostgreSQL connected');
 
-  // Sync tables (use migrations in production)
-  await sequelize.sync({ alter: true });
+  // In dev, alter:true auto-applies model changes for convenience.
+  // In production, alter:true re-creates unique indexes on every boot
+  // (Sequelize bug), which bloats the schema. Schema changes in production
+  // go through server/scripts/migrations instead.
+  await sequelize.sync({ alter: process.env.NODE_ENV !== 'production' });
 
   await setupOidcStrategy();
 
