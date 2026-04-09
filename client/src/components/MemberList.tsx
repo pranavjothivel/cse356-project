@@ -29,7 +29,19 @@ export default function MemberList({ communityId, userRole }: Props) {
   useEffect(() => {
     fetchMembers();
     const interval = setInterval(fetchMembers, 30000);
-    return () => clearInterval(interval);
+    const wsHandler = (e: Event) => {
+      const ev = (e as CustomEvent).detail;
+      if (ev?.type === 'presence.changed') {
+        setMembers(prev => prev.map(m =>
+          m.user.id === ev.userId ? { ...m, presence: ev.presence } : m
+        ));
+      }
+    };
+    window.addEventListener('ws-event', wsHandler);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('ws-event', wsHandler);
+    };
   }, [communityId]);
 
   const handleRoleChange = async (userId: string, newRole: string) => {

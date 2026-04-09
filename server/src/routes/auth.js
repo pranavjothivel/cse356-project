@@ -8,6 +8,7 @@ const path = require('path');
 
 const User = require('../models/User');
 const { upload, minioClient } = require('../upload');
+const { broadcastToAllConnected } = require('../ws');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -30,13 +31,13 @@ function oauthSuccessHandler(provider) {
         return req.logIn(user, (loginErr) => {
           if (loginErr) return next(loginErr);
           //res.redirect('/');
-          res.redirect(process.env.FRONTEND_URL + "/");
+          res.redirect(process.env.FRONTEND_URL.replace(/\/$/, '') + "/");
         });
       }
 
       if (info?.message === 'pending_link' && req.session.pendingOAuth) {
         return req.session.save(() => {
-          res.redirect(process.env.FRONTEND_URL + "/login?oauth=true");
+          res.redirect(process.env.FRONTEND_URL.replace(/\/$/, '') + "/login?oauth=true");
         });
       }
 
@@ -263,9 +264,21 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
   try {
     const { displayName, away, away_msg } = req.body;
     if (displayName) req.user.display_name = displayName;
+    const awayChanged = away !== undefined && away !== req.user.away;
     if (away !== undefined) req.user.away = away;
-    if (away_msg) req.user.away_msg = away_msg;
+    if (away_msg !== undefined) req.user.away_msg = away_msg;
     await req.user.save();
+
+    // Broadcast presence change to all connected users if away status changed
+    if (awayChanged) {
+      const presence = away ? 'away' : 'online';
+      broadcastToAllConnected({
+        type: 'presence.changed',
+        userId: req.user.id,
+        presence,
+      }, { excludeUserId: req.user.id });
+    }
+
     res.json({ message: 'Profile updated' });
   } catch (err) {
     next(err);

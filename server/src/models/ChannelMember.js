@@ -20,6 +20,8 @@ ChannelMember.init({
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
   },
+  // Tracks the furthest message this user has read in this channel
+  last_read_message_id: { type: DataTypes.UUID, allowNull: true, defaultValue: null },
 }, {
   sequelize,
   tableName: 'channel_members',

@@ -10,6 +10,8 @@ ConversationParticipant.init({
   // Per-user "hide from sidebar" flag — used for 1:1 DMs the user wants to dismiss
   // without deleting history. Cleared on next message in the conversation.
   hidden_at: { type: DataTypes.DATE, allowNull: true },
+  // Tracks the furthest message this user has read in the conversation
+  last_read_message_id: { type: DataTypes.UUID, allowNull: true, defaultValue: null },
 }, {
   sequelize,
   tableName: 'conversation_participants',

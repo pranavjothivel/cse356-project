@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { Op } = require('sequelize');
 const { UniqueConstraintError } = require('sequelize');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
+const Message = require('../models/Message');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');
 
@@ -108,19 +109,37 @@ router.get('/:communityId', async (req, res, next) => {
     });
     if (!community) return res.status(404).json({ error: 'Community not found' });
 
-    // Add is_joined flag to each channel
+    // Add is_joined and hasUnread flags to each channel
     const channelIds = community.channels.map(c => c.id);
     const joinedChannels = channelIds.length > 0
-      ? await ChannelMember.findAll({ where: { channel_id: channelIds, user_id: req.user.id }, attributes: ['channel_id'] })
+      ? await ChannelMember.findAll({ where: { channel_id: channelIds, user_id: req.user.id }, attributes: ['channel_id', 'last_read_message_id'] })
       : [];
-    const joinedSet = new Set(joinedChannels.map(cm => cm.channel_id));
+    const joinedMap = new Map(joinedChannels.map(cm => [cm.channel_id, cm.last_read_message_id]));
+
+    // For each joined channel, check if there are messages newer than last_read
+    const unreadSet = new Set();
+    for (const [channelId, lastReadId] of joinedMap.entries()) {
+      const where = { channel_id: channelId };
+      if (lastReadId) {
+        const lastRead = await Message.findByPk(lastReadId, { attributes: ['created_at', 'id'] });
+        if (lastRead) {
+          where[Op.or] = [
+            { created_at: { [Op.gt]: lastRead.created_at } },
+            { created_at: lastRead.created_at, id: { [Op.gt]: lastRead.id } },
+          ];
+        }
+      }
+      const count = await Message.count({ where });
+      if (count > 0) unreadSet.add(channelId);
+    }
 
     const channels = community.channels.map(c => ({
       id: c.id,
       name: c.name,
       is_private: c.is_private,
       created_at: c.created_at,
-      is_joined: joinedSet.has(c.id),
+      is_joined: joinedMap.has(c.id),
+      hasUnread: unreadSet.has(c.id),
     }));
 
     res.json({

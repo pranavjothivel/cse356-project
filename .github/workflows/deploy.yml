@@ -135,7 +135,7 @@ jobs:
       - name: Check for config changes
         id: changes
         run: |
-          git fetch origin main --depth=1
+          git fetch origin main
           base=$(git merge-base HEAD origin/main)
           haproxy=$(git diff --name-only "$base" HEAD -- infra/haproxy/haproxy.cfg | wc -l)
           nginx=$(git diff --name-only "$base" HEAD -- infra/nginx/ | wc -l)

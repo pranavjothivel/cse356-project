@@ -1,7 +1,9 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
+const { Op } = require('sequelize');
 const User = require('./models/User');
+const CommunityMember = require('./models/CommunityMember');
 const redisClient = require('./redis');
 
 // Identifier that should be sent when publishing through Redis
@@ -32,13 +34,23 @@ subClient.subscribe('messages', (msg) => {
       }
       else if (msg.value === "unaway") {
         Object.keys(conns).forEach((k) => {
-          conns[k].send("away");
+          conns[k].send("unaway");
         });
       }
     }
     else if (msg.type === "fanout") {
       // Generic per-user fanout published from any worker. Deliver locally only.
       deliverLocal(msg.userIds, msg.payload);
+    }
+    else if (msg.type === "fanout_all") {
+      // Broadcast payload to every locally connected user (optionally excluding one).
+      const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
+      for (const [uid, conns] of users.entries()) {
+        if (msg.excludeUserId && uid === msg.excludeUserId) continue;
+        for (const cid of Object.keys(conns)) {
+          try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+        }
+      }
     }
 
   }
@@ -132,6 +144,43 @@ function broadcastToUsers(userIds, payload) {
   }));
 }
 
+/**
+ * Fan out a JSON payload to every currently connected WS session across the cluster.
+ * Used for presence.changed — we want any connected user to observe presence transitions,
+ * regardless of whether they share a community or DM with the subject.
+ */
+function broadcastToAllConnected(payload, { excludeUserId } = {}) {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  // Local delivery
+  for (const [uid, conns] of users.entries()) {
+    if (uid === excludeUserId) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+    }
+  }
+  // Cross-server fanout
+  redisClient.publish('messages', JSON.stringify({
+    serverId,
+    msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
+  }));
+}
+
+async function getCoCommunityUserIds(userId) {
+  const myCommunities = await CommunityMember.findAll({
+    where: { user_id: userId },
+    attributes: ['community_id'],
+    raw: true,
+  });
+  if (myCommunities.length === 0) return [];
+  const communityIds = myCommunities.map(r => r.community_id);
+  const coMembers = await CommunityMember.findAll({
+    where: { community_id: communityIds, user_id: { [Op.ne]: userId } },
+    attributes: ['user_id'],
+    raw: true,
+  });
+  return [...new Set(coMembers.map(r => r.user_id))];
+}
+
 const configureWSServer = (wss) => {
   wss.on('connection', async (ws, req) => {
     let connId = crypto.randomUUID();
@@ -148,8 +197,9 @@ const configureWSServer = (wss) => {
 
           let conns = users.get(id);
           let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
+          const prevFinalPresence = redisUser.presence;
 
-          if (newPresence == "away") {
+          if (newPresence === "away") {
             // Set each of the user's connections to away and notify them
             Object.keys(redisUser.conns).forEach((k) => {
               if (conns[k]) conns[k].send("away");
@@ -164,37 +214,39 @@ const configureWSServer = (wss) => {
             });
           }
           else {
-            const user = User.findOne({ where: {id} });
-            // Make sure to not override away
-            if (!user.away) {
+            const user = await User.findOne({ where: { id } });
+            // Don't override away if user has it set
+            if (!user || !user.away) {
               redisUser.conns[connId].presence = newPresence;
             }
           }
 
-          // Determine display presence
+          // Determine final display presence: away > online > idle
           let finalPresence = "idle";
-          let arr = Object.keys(redisUser.conns);
-          for (let i = 0; i < arr.length; i++) {
-            // If any connection has "online" or "away", use its presence
-            if (redisUser.conns[arr[i]].presence !== "idle") {
-              finalPresence = redisUser.conns[arr[i]].presence;
-              break;
-            }
+          for (const cid of Object.keys(redisUser.conns)) {
+            const p = redisUser.conns[cid].presence;
+            if (p === "away") { finalPresence = "away"; break; }
+            if (p === "online") finalPresence = "online";
           }
           redisUser.presence = finalPresence;
 
           await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Clients are only notified if away or unaway was sent
+          // Sync user's own other sessions (cross-server) for away/unaway
           if (newPresence === "away" || newPresence === "unaway") {
-            redisClient.publish("messages", JSON.stringify({ 
-              serverId, 
-              msg: {
-                id,
-                type: msg.type,
-                value: msg.value
-              }
+            redisClient.publish("messages", JSON.stringify({
+              serverId,
+              msg: { id, type: msg.type, value: msg.value }
             }));
+          }
+
+          // Broadcast to all connected users whenever final presence actually changed
+          if (finalPresence !== prevFinalPresence) {
+            broadcastToAllConnected({
+              type: 'presence.changed',
+              userId: id,
+              presence: finalPresence,
+            }, { excludeUserId: id });
           }
         }
 
@@ -209,31 +261,45 @@ const configureWSServer = (wss) => {
     ws.on('close', async () => {
       try {
         let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
-
-        // Determine display presence
-        let finalPresence = "idle";
-        let arr = Object.keys(redisUser.conns);
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i] == connId) continue;
-
-          if (redisUser.conns[arr[i]].presence !== "idle") {
-            finalPresence = redisUser.conns[arr[i]].presence;
-            break;
-          }
-        }
-        redisUser.presence = finalPresence;
+        const arr = Object.keys(redisUser.conns);
 
         connections.delete(connId);
+
         if (arr.length === 1) {
-          // Delete user completely if no more connections
+          // Last connection — user is now offline
           await redisClient.del(`users:${id}`);
           users.delete(id);
+          // Broadcast offline to all connected users
+          broadcastToAllConnected({
+            type: 'presence.changed',
+            userId: id,
+            presence: 'offline',
+          }, { excludeUserId: id });
         }
         else {
           delete redisUser.conns[connId];
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-
           delete users.get(id)[connId];
+
+          // Recalculate presence with remaining connections: away > online > idle
+          let finalPresence = "idle";
+          for (const cid of Object.keys(redisUser.conns)) {
+            const p = redisUser.conns[cid].presence;
+            if (p === "away") { finalPresence = "away"; break; }
+            if (p === "online") finalPresence = "online";
+          }
+
+          // Broadcast if presence changed (e.g. the closing tab was the only online one)
+          if (finalPresence !== redisUser.presence) {
+            redisUser.presence = finalPresence;
+            broadcastToAllConnected({
+              type: 'presence.changed',
+              userId: id,
+              presence: finalPresence,
+            }, { excludeUserId: id });
+          }
+
+          redisUser.presence = finalPresence;
+          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
         }
 
         console.log('Client disconnected');
@@ -283,4 +349,4 @@ const configureWSServer = (wss) => {
   });
 }
 
-module.exports = { configureWSServer, broadcastToUsers };
+module.exports = { configureWSServer, broadcastToUsers, broadcastToAllConnected, getCoCommunityUserIds };
