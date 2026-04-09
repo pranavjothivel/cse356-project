@@ -100,10 +100,6 @@ async function start() {
   await sequelize.authenticate();
   console.log('PostgreSQL connected');
 
-  // Enable pg_trgm for unicode-safe trigram search.
-  // In production this is a no-op after migration 0001 has been applied.
-  await sequelize.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
-
   // In dev, alter:true auto-applies model changes for convenience.
   // In production, alter:true re-creates unique indexes on every boot
   // (Sequelize bug), which bloats the schema. Schema changes in production
