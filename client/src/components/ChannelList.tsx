@@ -45,7 +45,9 @@ export default function ChannelList({ communityId, channels, userRole, selectedI
           {c.is_private && <span className="lock-icon">&#128274;</span>}
           <span style={{ opacity: c.is_joined ? 1 : 0.5, fontWeight: c.hasUnread ? 700 : undefined }}>{c.name}</span>
           {c.hasUnread && selectedId !== c.id && (
-            <span style={{ marginLeft: 4, width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block", flexShrink: 0 }} />
+            <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, color: "#5865f2", textTransform: "uppercase", letterSpacing: 0.3 }}>
+              Unread
+            </span>
           )}
           {!c.is_joined && (
             <button className="join-btn" onClick={(e) => { e.stopPropagation(); handleJoin(c.id); }}>Join</button>

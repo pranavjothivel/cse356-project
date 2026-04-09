@@ -137,10 +137,12 @@ export default function HomeScreen() {
                 <div className="main-content-header" style={{justifyContent: "space-between"}}>
                     <div style={{display: "flex", gap: 12}}>
                         <div className="cursorPtr" onClick={() => setView("home")}>Home</div>
-                        <div className="cursorPtr" onClick={() => setView("dms")} style={{ position: "relative" }}>
+                        <div className="cursorPtr" onClick={() => setView("dms")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             Direct Messages
                             {unreadConvIds.size > 0 && (
-                                <span style={{ position: "absolute", top: -4, right: -10, width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block" }} />
+                                <span style={{ fontSize: 10, fontWeight: 700, color: "#5865f2", textTransform: "uppercase", letterSpacing: 0.3 }}>
+                                    Unread
+                                </span>
                             )}
                         </div>
                     </div>

@@ -355,7 +355,9 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                         .join(", ") || "(self)"}
                                 </span>
                                 {unreadConvIds.has(c.id) && (
-                                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#5865f2", display: "inline-block", flexShrink: 0 }} />
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: "#5865f2", textTransform: "uppercase", letterSpacing: 0.3 }}>
+                                        Unread
+                                    </span>
                                 )}
                             </div>
                             {c.hidden && (
