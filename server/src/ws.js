@@ -166,8 +166,9 @@ const configureWSServer = (wss) => {
 
           let conns = users.get(id);
           let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
+          const prevFinalPresence = redisUser.presence;
 
-          if (newPresence == "away") {
+          if (newPresence === "away") {
             // Set each of the user's connections to away and notify them
             Object.keys(redisUser.conns).forEach((k) => {
               if (conns[k]) conns[k].send("away");
@@ -182,38 +183,34 @@ const configureWSServer = (wss) => {
             });
           }
           else {
-            const user = User.findOne({ where: {id} });
-            // Make sure to not override away
-            if (!user.away) {
+            const user = await User.findOne({ where: { id } });
+            // Don't override away if user has it set
+            if (!user || !user.away) {
               redisUser.conns[connId].presence = newPresence;
             }
           }
 
-          // Determine display presence
+          // Determine final display presence: away > online > idle
           let finalPresence = "idle";
-          let arr = Object.keys(redisUser.conns);
-          for (let i = 0; i < arr.length; i++) {
-            // If any connection has "online" or "away", use its presence
-            if (redisUser.conns[arr[i]].presence !== "idle") {
-              finalPresence = redisUser.conns[arr[i]].presence;
-              break;
-            }
+          for (const cid of Object.keys(redisUser.conns)) {
+            const p = redisUser.conns[cid].presence;
+            if (p === "away") { finalPresence = "away"; break; }
+            if (p === "online") finalPresence = "online";
           }
           redisUser.presence = finalPresence;
 
           await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Sync user's own other sessions (cross-server)
+          // Sync user's own other sessions (cross-server) for away/unaway
           if (newPresence === "away" || newPresence === "unaway") {
             redisClient.publish("messages", JSON.stringify({
               serverId,
-              msg: {
-                id,
-                type: msg.type,
-                value: msg.value
-              }
+              msg: { id, type: msg.type, value: msg.value }
             }));
-            // Broadcast presence change to all users sharing a community
+          }
+
+          // Broadcast to co-community users whenever final presence actually changed
+          if (finalPresence !== prevFinalPresence) {
             const coCommunityUserIds = await getCoCommunityUserIds(id);
             broadcastToUsers(coCommunityUserIds, {
               type: 'presence.changed',
@@ -234,31 +231,47 @@ const configureWSServer = (wss) => {
     ws.on('close', async () => {
       try {
         let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
-
-        // Determine display presence
-        let finalPresence = "idle";
-        let arr = Object.keys(redisUser.conns);
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i] == connId) continue;
-
-          if (redisUser.conns[arr[i]].presence !== "idle") {
-            finalPresence = redisUser.conns[arr[i]].presence;
-            break;
-          }
-        }
-        redisUser.presence = finalPresence;
+        const arr = Object.keys(redisUser.conns);
 
         connections.delete(connId);
+
         if (arr.length === 1) {
-          // Delete user completely if no more connections
+          // Last connection — user is now offline
           await redisClient.del(`users:${id}`);
           users.delete(id);
+          // Broadcast offline to co-community users
+          const coCommunityUserIds = await getCoCommunityUserIds(id);
+          broadcastToUsers(coCommunityUserIds, {
+            type: 'presence.changed',
+            userId: id,
+            presence: 'offline',
+          });
         }
         else {
           delete redisUser.conns[connId];
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-
           delete users.get(id)[connId];
+
+          // Recalculate presence with remaining connections: away > online > idle
+          let finalPresence = "idle";
+          for (const cid of Object.keys(redisUser.conns)) {
+            const p = redisUser.conns[cid].presence;
+            if (p === "away") { finalPresence = "away"; break; }
+            if (p === "online") finalPresence = "online";
+          }
+
+          // Broadcast if presence changed (e.g. the closing tab was the only online one)
+          if (finalPresence !== redisUser.presence) {
+            redisUser.presence = finalPresence;
+            const coCommunityUserIds = await getCoCommunityUserIds(id);
+            broadcastToUsers(coCommunityUserIds, {
+              type: 'presence.changed',
+              userId: id,
+              presence: finalPresence,
+            });
+          }
+
+          redisUser.presence = finalPresence;
+          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
         }
 
         console.log('Client disconnected');
