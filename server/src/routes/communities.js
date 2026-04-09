@@ -121,11 +121,11 @@ router.get('/:communityId', async (req, res, next) => {
     for (const [channelId, lastReadId] of joinedMap.entries()) {
       const where = { channel_id: channelId };
       if (lastReadId) {
-        const lastRead = await Message.findByPk(lastReadId, { attributes: ['created_at', 'id'] });
+        const lastRead = await Message.findByPk(lastReadId, { attributes: ['createdAt', 'id'] });
         if (lastRead) {
           where[Op.or] = [
-            { created_at: { [Op.gt]: lastRead.created_at } },
-            { created_at: lastRead.created_at, id: { [Op.gt]: lastRead.id } },
+            { createdAt: { [Op.gt]: lastRead.createdAt } },
+            { createdAt: lastRead.createdAt, id: { [Op.gt]: lastRead.id } },
           ];
         }
       }

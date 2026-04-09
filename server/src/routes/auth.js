@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const passport = require('passport');
-const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
@@ -16,6 +15,25 @@ const { broadcastToAllConnected } = require('../ws');
 function requireAuth(req, res, next) {
   if (req.isAuthenticated()) return next();
   res.status(401).json({ error: 'Not authenticated' });
+}
+
+/**
+ * Map a Sequelize error to an HTTP response if it represents a unique-constraint
+ * violation on the users table. Returns true if the response was sent.
+ */
+function handleUniqueUserConflict(err, res) {
+  if (err && err.name === 'SequelizeUniqueConstraintError') {
+    // err.errors is an array of ValidationErrorItem; path is the column name.
+    const path = err.errors && err.errors[0] && err.errors[0].path;
+    let field = 'username';
+    if (typeof path === 'string') {
+      if (path.includes('email')) field = 'email';
+      else if (path.includes('username')) field = 'username';
+    }
+    res.status(409).json({ error: `${field === 'email' ? 'Email' : 'Username'} already taken`, field });
+    return true;
+  }
+  return false;
 }
 
 function oauthSuccessHandler(provider) {
@@ -58,16 +76,15 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    const orClauses = [{ username }];
-    if (email) orClauses.push({ email });
-    const existing = await User.findOne({ where: { [Op.or]: orClauses } });
-    if (existing) {
-      return res.status(409).json({ error: 'Username or email already taken' });
-    }
-
     const user = User.build({ username, email: email || null, display_name: username });
     await user.setPassword(password);
-    await user.save();
+
+    try {
+      await user.save();
+    } catch (err) {
+      if (handleUniqueUserConflict(err, res)) return;
+      throw err;
+    }
 
     req.logIn(user, (err) => {
       if (err) return next(err);
@@ -160,9 +177,6 @@ router.post('/oauth-connect/new', async (req, res, next) => {
     const { username, password } = req.body;
     if (!username) return res.status(400).json({ error: 'Username is required' });
 
-    const existing = await User.findOne({ where: { username } });
-    if (existing) return res.status(409).json({ error: 'Username already taken' });
-
     const user = User.build({
       username,
       email: pending.profile.email || null,
@@ -171,7 +185,13 @@ router.post('/oauth-connect/new', async (req, res, next) => {
 
     if (password) await user.setPassword(password);
     user.linkProvider(pending.provider, pending.providerId, pending.profile);
-    await user.save();
+
+    try {
+      await user.save();
+    } catch (err) {
+      if (handleUniqueUserConflict(err, res)) return;
+      throw err;
+    }
 
     delete req.session.pendingOAuth;
 
