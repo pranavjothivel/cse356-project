@@ -308,4 +308,4 @@ const configureWSServer = (wss) => {
   });
 }
 
-module.exports = { configureWSServer, broadcastToUsers };
+module.exports = { configureWSServer, broadcastToUsers, getCoCommunityUserIds };

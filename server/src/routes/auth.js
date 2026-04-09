@@ -8,6 +8,7 @@ const path = require('path');
 
 const User = require('../models/User');
 const { upload, minioClient } = require('../upload');
+const { broadcastToUsers, getCoCommunityUserIds } = require('../ws');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -263,9 +264,24 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
   try {
     const { displayName, away, away_msg } = req.body;
     if (displayName) req.user.display_name = displayName;
+    const awayChanged = away !== undefined && away !== req.user.away;
     if (away !== undefined) req.user.away = away;
-    if (away_msg) req.user.away_msg = away_msg;
+    if (away_msg !== undefined) req.user.away_msg = away_msg;
     await req.user.save();
+
+    // Broadcast presence change to co-community users if away status changed
+    if (awayChanged) {
+      const presence = away ? 'away' : 'online';
+      const coCommunityUserIds = await getCoCommunityUserIds(req.user.id);
+      if (coCommunityUserIds.length > 0) {
+        broadcastToUsers(coCommunityUserIds, {
+          type: 'presence.changed',
+          userId: req.user.id,
+          presence,
+        });
+      }
+    }
+
     res.json({ message: 'Profile updated' });
   } catch (err) {
     next(err);
