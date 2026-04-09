@@ -30,13 +30,13 @@ function oauthSuccessHandler(provider) {
         return req.logIn(user, (loginErr) => {
           if (loginErr) return next(loginErr);
           //res.redirect('/');
-          res.redirect(process.env.FRONTEND_URL + "/");
+          res.redirect(process.env.FRONTEND_URL.replace(/\/$/, '') + "/");
         });
       }
 
       if (info?.message === 'pending_link' && req.session.pendingOAuth) {
         return req.session.save(() => {
-          res.redirect(process.env.FRONTEND_URL + "/login?oauth=true");
+          res.redirect(process.env.FRONTEND_URL.replace(/\/$/, '') + "/login?oauth=true");
         });
       }
 
