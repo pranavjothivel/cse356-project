@@ -94,8 +94,13 @@ router.get('/discover', async (req, res, next) => {
 });
 
 // GET /:communityId — Get community details
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 router.get('/:communityId', async (req, res, next) => {
   try {
+    if (!UUID_RE.test(req.params.communityId)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     const membership = await CommunityMember.findOne({
       where: { community_id: req.params.communityId, user_id: req.user.id },
     });
@@ -156,12 +161,11 @@ router.post('/:communityId/join', async (req, res, next) => {
     const community = await Community.findByPk(req.params.communityId);
     if (!community) return res.status(404).json({ error: 'Community not found' });
 
-    const existing = await CommunityMember.findOne({
+    const [, created] = await CommunityMember.findOrCreate({
       where: { community_id: community.id, user_id: req.user.id },
+      defaults: { role: 'member' },
     });
-    if (existing) return res.status(400).json({ error: 'Already a member' });
-
-    await CommunityMember.create({ community_id: community.id, user_id: req.user.id, role: 'member' });
+    if (!created) return res.status(400).json({ error: 'Already a member' });
 
     // Auto-join all public channels
     const publicChannels = await Channel.findAll({
