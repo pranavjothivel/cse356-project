@@ -3,6 +3,8 @@ const { Op } = require('sequelize');
 const { Channel, ChannelMember, CommunityMember, Community, User } = require('../models');
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
+const { buildMessageCursor } = require('../util/messageCursor');
+const { isForwardRead } = require('../util/readReceipts');
 
 const router = Router();
 
@@ -148,13 +150,8 @@ router.get('/:channelId/messages', requireChannelMember, async (req, res, next) 
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
     const where = { channel_id: req.channel.id };
     if (req.query.before) {
-      const cursor = await Message.findByPk(req.query.before);
-      if (cursor) {
-        where[Op.or] = [
-          { created_at: { [Op.lt]: cursor.created_at } },
-          { created_at: cursor.created_at, id: { [Op.lt]: cursor.id } },
-        ];
-      }
+      const cursorWhere = await buildMessageCursor(req.query.before, 'before');
+      if (cursorWhere) Object.assign(where, cursorWhere);
     }
     const messages = await Message.findAll({
       where,
@@ -219,15 +216,8 @@ router.post('/:channelId/read', requireChannelMember, async (req, res, next) => 
     if (!member) return res.status(403).json({ error: 'Not a channel member' });
 
     // Only advance forward
-    if (member.last_read_message_id) {
-      const current = await Message.findByPk(member.last_read_message_id);
-      if (current) {
-        const currentTs = current.createdAt.getTime();
-        const newTs = msg.createdAt.getTime();
-        if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
-          return res.json({ lastReadMessageId: member.last_read_message_id });
-        }
-      }
+    if (!await isForwardRead(member.last_read_message_id, msg)) {
+      return res.json({ lastReadMessageId: member.last_read_message_id });
     }
 
     member.last_read_message_id = messageId;

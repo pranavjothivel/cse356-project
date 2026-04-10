@@ -8,6 +8,8 @@ const ConversationParticipant = require('../models/ConversationParticipant');
 const Message = require('../models/Message');
 const User = require('../models/User');
 const { broadcastToUsers } = require('../ws');
+const { buildMessageCursor } = require('../util/messageCursor');
+const { isForwardRead } = require('../util/readReceipts');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -238,14 +240,8 @@ router.get('/:id/messages', requireAuth, requireMember, async (req, res, next) =
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
     const where = { conversation_id: req.conversation.id };
     if (req.query.before) {
-      const cursor = await Message.findByPk(req.query.before);
-      if (cursor) {
-        // (created_at, id) tuple comparison so same-ms messages still order deterministically
-        where[Op.or] = [
-          { created_at: { [Op.lt]: cursor.created_at } },
-          { created_at: cursor.created_at, id: { [Op.lt]: cursor.id } },
-        ];
-      }
+      const cursorWhere = await buildMessageCursor(req.query.before, 'before');
+      if (cursorWhere) Object.assign(where, cursorWhere);
     }
     const messages = await Message.findAll({
       where,
@@ -438,15 +434,8 @@ router.post('/:id/read', requireAuth, requireMember, async (req, res, next) => {
     if (!msg) return res.status(404).json({ error: 'Message not found in this conversation' });
 
     // Only advance forward — don't allow marking an older message as last-read
-    if (req.participant.last_read_message_id) {
-      const current = await Message.findByPk(req.participant.last_read_message_id);
-      if (current) {
-        const currentTs = current.createdAt.getTime();
-        const newTs = msg.createdAt.getTime();
-        if (currentTs > newTs || (currentTs === newTs && current.id >= msg.id)) {
-          return res.json({ lastReadMessageId: req.participant.last_read_message_id });
-        }
-      }
+    if (!await isForwardRead(req.participant.last_read_message_id, msg)) {
+      return res.json({ lastReadMessageId: req.participant.last_read_message_id });
     }
 
     req.participant.last_read_message_id = messageId;
