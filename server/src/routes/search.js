@@ -3,6 +3,10 @@ const router = express.Router();
 const { QueryTypes } = require('sequelize');
 const sequelize = require('../db');
 
+// Must match the expression in server/scripts/migrations/0002-messages-fts-index.sql
+// exactly, or the planner will fall back to a seq-scan.
+const FTS_CONFIG = 'english';
+
 function requireAuth(req, res, next) {
   if (req.isAuthenticated()) return next();
   res.status(401).json({ error: 'Not authenticated' });
@@ -119,7 +123,7 @@ router.get('/', requireAuth, async (req, res, next) => {
        JOIN users u ON u.id = m.author_id
        WHERE m.deleted_at IS NULL
          AND ${scopeClause}
-         AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $1)
+         AND to_tsvector('${FTS_CONFIG}', m.content) @@ plainto_tsquery('${FTS_CONFIG}', $1)
          ${extraWhere}
        ORDER BY m.created_at DESC
        LIMIT ${limitClause}`,
