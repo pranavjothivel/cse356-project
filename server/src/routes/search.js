@@ -15,7 +15,7 @@ function requireAuth(req, res, next) {
 // GET /api/search
 // Query params:
 //   q           - search text (required)
-//   scope       - 'community' | 'conversation' (required)
+//   scope       - 'community' | 'conversation' | omitted (global across all accessible content)
 //   communityId - required when scope=community
 //   conversationId - required when scope=conversation
 //   authorId    - optional filter by author UUID
@@ -31,13 +31,10 @@ router.get('/', requireAuth, async (req, res, next) => {
     if (!q || !q.trim()) {
       return res.status(400).json({ error: 'q is required' });
     }
-    if (scope !== 'community' && scope !== 'conversation') {
-      return res.status(400).json({ error: "scope must be 'community' or 'conversation'" });
-    }
 
     // Build the plainto_tsquery expression — plainto_tsquery handles plain text
     // without requiring the caller to know tsquery syntax.
-    const bindings = [q.trim()];
+    const bindings = [q.trim(), userId];
     let scopeClause;
 
     if (scope === 'community') {
@@ -55,22 +52,21 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
 
       // Accessible channels: public ones + private ones the user has joined
-      bindings.push(communityId, userId);
+      bindings.push(communityId);
       scopeClause = `
         m.channel_id IN (
           SELECT c.id FROM channels c
-          WHERE c.community_id = $2
+          WHERE c.community_id = $3
             AND (
               c.is_private = false
               OR EXISTS (
                 SELECT 1 FROM channel_members cm
-                WHERE cm.channel_id = c.id AND cm.user_id = $3
+                WHERE cm.channel_id = c.id AND cm.user_id = $2
               )
             )
         )
       `;
-    } else {
-      // scope = conversation
+    } else if (scope === 'conversation') {
       if (!conversationId) {
         return res.status(400).json({ error: 'conversationId is required for conversation scope' });
       }
@@ -85,7 +81,26 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
 
       bindings.push(conversationId);
-      scopeClause = `m.conversation_id = $2`;
+      scopeClause = `m.conversation_id = $3`;
+    } else {
+      // No scope — global search across all content the user can access:
+      // channels in communities they belong to (public + joined private) + their conversations
+      scopeClause = `
+        (
+          m.channel_id IN (
+            SELECT c.id FROM channels c
+            JOIN community_members cm2 ON cm2.community_id = c.community_id AND cm2.user_id = $2
+            WHERE c.is_private = false
+              OR EXISTS (
+                SELECT 1 FROM channel_members chm
+                WHERE chm.channel_id = c.id AND chm.user_id = $2
+              )
+          )
+          OR m.conversation_id IN (
+            SELECT conversation_id FROM conversation_participants WHERE user_id = $2
+          )
+        )
+      `;
     }
 
     // Optional filters
