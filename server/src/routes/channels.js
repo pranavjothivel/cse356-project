@@ -65,6 +65,7 @@ function serializeChannelMessage(m) {
     content: m.deleted_at ? null : m.content,
     createdAt: m.created_at || m.createdAt,
     editedAt: m.edited_at,
+    deleted: !!m.deleted_at,
     deletedAt: m.deleted_at,
   };
 }

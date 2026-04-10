@@ -37,7 +37,15 @@ router.get('/', requireAuth, async (req, res, next) => {
     const bindings = [q.trim(), userId];
     let scopeClause;
 
-    if (scope === 'community') {
+    // Infer scope from provided IDs when not explicitly set.
+    // Precedence: explicit scope > communityId → community > conversationId → conversation > global
+    let effectiveScope = scope;
+    if (!effectiveScope) {
+      if (communityId) effectiveScope = 'community';
+      else if (conversationId) effectiveScope = 'conversation';
+    }
+
+    if (effectiveScope === 'community') {
       if (!communityId) {
         return res.status(400).json({ error: 'communityId is required for community scope' });
       }
@@ -66,7 +74,7 @@ router.get('/', requireAuth, async (req, res, next) => {
             )
         )
       `;
-    } else if (scope === 'conversation') {
+    } else if (effectiveScope === 'conversation') {
       if (!conversationId) {
         return res.status(400).json({ error: 'conversationId is required for conversation scope' });
       }

@@ -18,6 +18,7 @@ const conversationsRouter = require('./routes/conversations');
 const usersRouter = require('./routes/users');
 const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
+const messagesRouter = require('./routes/messages');
 const redisClient = require('./redis');
 const { configureWSServer } = require('./ws');
 
@@ -67,6 +68,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/communities', communitiesRouter);
 app.use('/api/channels', channelsRouter);
 app.use('/api/conversations', conversationsRouter);
+app.use('/api/messages', messagesRouter);
 app.use('/api/users', usersRouter);
 
 app.get('/', (req, res) => {

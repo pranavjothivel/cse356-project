@@ -66,6 +66,7 @@ function serializeMessage(m) {
     content: m.deleted_at ? null : m.content,
     createdAt: m.createdAt,
     editedAt: m.edited_at,
+    deleted: !!m.deleted_at,
     deletedAt: m.deleted_at,
   };
 }
