@@ -13,10 +13,9 @@ interface ChannelMessage {
   channelId: string;
   authorId: string;
   author: Author | null;
-  content: string | null;
+  content: string;
   createdAt: string;
   editedAt: string | null;
-  deletedAt: string | null;
 }
 
 interface Props {
@@ -59,7 +58,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
     setEditingId(null);
     setDraft("");
     const load = async () => {
-      const res = await apiFetch(`/channels/${channelId}/messages?limit=100`);
+      const res = await apiFetch(`/messages?channelId=${channelId}&limit=100`);
       if (res.ok) {
         const data = await res.json();
         // Server returns newest-first; reverse for chronological display
@@ -98,13 +97,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
           setMessages((prev) => prev.map((m) => (m.id === ev.message.id ? ev.message : m)));
           break;
         case "channel.message.deleted":
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === ev.messageId
-                ? { ...m, content: null, deletedAt: new Date().toISOString() }
-                : m
-            )
-          );
+          setMessages((prev) => prev.filter((m) => m.id !== ev.messageId));
           break;
       }
     };
@@ -115,7 +108,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
   const sendMessage = async () => {
     if (!draft.trim()) return;
     setError("");
-    const res = await apiPost(`/channels/${channelId}/messages`, { content: draft });
+    const res = await apiPost(`/messages`, { channelId, content: draft });
     if (res.ok) {
       setDraft("");
     } else {
@@ -131,7 +124,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
 
   const saveEdit = async () => {
     if (!editingId) return;
-    const res = await apiPatch(`/channels/${channelId}/messages/${editingId}`, { content: editDraft });
+    const res = await apiPatch(`/messages/${editingId}`, { content: editDraft });
     if (res.ok) {
       setEditingId(null);
       setEditDraft("");
@@ -142,7 +135,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
   };
 
   const deleteMessage = async (m: ChannelMessage) => {
-    const res = await apiDelete(`/channels/${channelId}/messages/${m.id}`);
+    const res = await apiDelete(`/messages/${m.id}`);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       setError(body.error || "Failed to delete");
@@ -169,9 +162,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
               {m.editedAt && <span style={{ marginLeft: 4, fontStyle: "italic" }}>(edited)</span>}
             </div>
             <div>
-              {m.deletedAt ? (
-                <em style={{ color: "#666" }}>[deleted]</em>
-              ) : editingId === m.id ? (
+              {editingId === m.id ? (
                 <span style={{ display: "flex", gap: 4 }}>
                   <input
                     value={editDraft}
@@ -186,7 +177,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
               ) : (
                 <span>
                   {m.content}
-                  {!m.deletedAt && m.authorId === myId && (
+                  {m.authorId === myId && (
                     <span style={{ marginLeft: 8 }}>
                       <button
                         className="btn-small"

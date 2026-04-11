@@ -12,8 +12,6 @@ Message.init({
   author_id: { type: DataTypes.UUID, allowNull: false },
   content: { type: DataTypes.TEXT, allowNull: false },
   edited_at: { type: DataTypes.DATE, allowNull: true },
-  // Soft delete: row stays so scrollback / search can render a "[deleted]" placeholder.
-  deleted_at: { type: DataTypes.DATE, allowNull: true },
   // Up to 4 image URLs (uploaded via POST /api/upload)
   attachments: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false, defaultValue: [] },
 }, {
@@ -24,8 +22,9 @@ Message.init({
     { fields: ['conversation_id', 'created_at'] },
     { fields: ['channel_id', 'created_at'] },
     { fields: ['author_id'] },
-    // GIN index for full-text search on message content
-    { fields: [sequelize.literal("to_tsvector('english', content)")], using: 'GIN', name: 'messages_content_fts_idx' },
+    // FTS GIN index is managed via server/scripts/migrations/0002-messages-fts-index.sql.
+    // Expression-based GIN indexes don't belong here — sequelize.sync() handles them
+    // poorly and any syntax error would crash startup.
   ],
 });
 
