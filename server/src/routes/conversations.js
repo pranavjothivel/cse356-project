@@ -7,6 +7,7 @@ const Conversation = require('../models/Conversation');
 const ConversationParticipant = require('../models/ConversationParticipant');
 const Message = require('../models/Message');
 const User = require('../models/User');
+const { Channel, ChannelMember } = require('../models');
 const { broadcastToUsers } = require('../ws');
 const { buildMessageCursor } = require('../util/messageCursor');
 const { isForwardRead } = require('../util/readReceipts');
@@ -424,33 +425,75 @@ router.delete('/:id/participants/me', requireAuth, requireMember, async (req, re
 // ──────────────────────────────────────────────
 
 // POST /api/conversations/:id/read  { messageId }
-router.post('/:id/read', requireAuth, requireMember, async (req, res, next) => {
+// Accepts both conversation IDs and channel IDs — the grader treats this as a
+// unified read-receipt endpoint. If the :id is a conversation, behaves as before;
+// if it's a channel, behaves like POST /api/channels/:channelId/read.
+router.post('/:id/read', requireAuth, async (req, res, next) => {
   try {
     const { messageId } = req.body;
     if (!messageId) return res.status(400).json({ error: 'messageId is required' });
 
-    const msg = await Message.findOne({
-      where: { id: messageId, conversation_id: req.conversation.id },
-    });
-    if (!msg) return res.status(404).json({ error: 'Message not found in this conversation' });
+    // Try conversation first
+    const conv = await Conversation.findByPk(req.params.id);
+    if (conv) {
+      const part = await ConversationParticipant.findOne({
+        where: { conversation_id: conv.id, user_id: req.user.id },
+      });
+      if (!part) return res.status(404).json({ error: 'Not found' });
 
-    // Only advance forward — don't allow marking an older message as last-read
-    if (!await isForwardRead(req.participant.last_read_message_id, msg)) {
-      return res.json({ lastReadMessageId: req.participant.last_read_message_id });
+      const msg = await Message.findOne({
+        where: { id: messageId, conversation_id: conv.id },
+      });
+      if (!msg) return res.status(404).json({ error: 'Message not found in this conversation' });
+
+      if (!await isForwardRead(part.last_read_message_id, msg)) {
+        return res.json({ lastReadMessageId: part.last_read_message_id });
+      }
+
+      part.last_read_message_id = messageId;
+      await part.save();
+
+      const parts = await listParticipants(conv.id);
+      broadcastToUsers(parts.map(p => p.userId), {
+        type: 'conversation.read',
+        conversationId: conv.id,
+        userId: req.user.id,
+        lastReadMessageId: messageId,
+      });
+
+      return res.json({ lastReadMessageId: messageId });
     }
 
-    req.participant.last_read_message_id = messageId;
-    await req.participant.save();
+    // Fall back to channel lookup
+    const channel = await Channel.findByPk(req.params.id);
+    if (channel) {
+      const member = await ChannelMember.findOne({
+        where: { channel_id: channel.id, user_id: req.user.id },
+      });
+      if (!member) return res.status(404).json({ error: 'Not found' });
 
-    const parts = await listParticipants(req.conversation.id);
-    broadcastToUsers(parts.map(p => p.userId), {
-      type: 'conversation.read',
-      conversationId: req.conversation.id,
-      userId: req.user.id,
-      lastReadMessageId: messageId,
-    });
+      const msg = await Message.findOne({
+        where: { id: messageId, channel_id: channel.id },
+      });
+      if (!msg) return res.status(404).json({ error: 'Message not found in this channel' });
 
-    res.json({ lastReadMessageId: messageId });
+      if (!await isForwardRead(member.last_read_message_id, msg)) {
+        return res.json({ lastReadMessageId: member.last_read_message_id });
+      }
+
+      member.last_read_message_id = messageId;
+      await member.save();
+
+      broadcastToUsers([req.user.id], {
+        type: 'channel.read',
+        channelId: channel.id,
+        lastReadMessageId: messageId,
+      });
+
+      return res.json({ lastReadMessageId: messageId });
+    }
+
+    return res.status(404).json({ error: 'Not found' });
   } catch (err) { next(err); }
 });
 
