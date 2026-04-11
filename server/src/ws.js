@@ -408,32 +408,53 @@ const configureWSServer = (wss) => {
 
 
     // Initialization
+    let didResetAway = false;
+    let wasFirstConn = false;
     try {
       // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
       const token = url.searchParams.get('token');
       id = jwt.verify(token, process.env.JWT_SECRET).id;
 
-      // Look up DB.away so a reconnecting away user is not briefly stamped
-      // online. Spec: away overrides online/idle.
       const dbUser = await User.findByPk(id);
-      const awayOverride = !!(dbUser && dbUser.away);
-      const initialConnPresence = awayOverride ? "away" : "online";
-      // `base` is the conn's underlying idle/online state, frozen at 'online'
-      // on a fresh connection. If the user is currently away, the effective
-      // presence is 'away' but `base` still starts at 'online' so unaway
-      // restores this new conn to 'online'.
-      const newConn = { presence: initialConnPresence, base: "online" };
+
+      // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
+      // says "disconnect/reconnect doesn't count as activity", which we read
+      // as: a reconnect is a fresh session, not a continuation. We only
+      // reset on a user's FIRST live connection (redis hash empty) — opening
+      // a second tab while already connected leaves away alone, so users can
+      // still set away and have it persist across tabs within a session.
+      //
+      // The reset happens BEFORE we create the new conn in Redis, and we
+      // push an "unaway" frame on this socket before "ready" so the client's
+      // auth state flips before HomeScreen's ready-handler reads
+      // auth.user.away and sends the initial presence frame.
 
       await withUserPresenceLock(id, async () => {
-        const userStr = await redisClient.hGet(`users:${id}`, "body");
+        const existingStr = await redisClient.hGet(`users:${id}`, "body");
+        const isFirstConn = !existingStr;
+        wasFirstConn = isFirstConn;
+
+        if (isFirstConn && dbUser && dbUser.away) {
+          dbUser.away = false;
+          await dbUser.save();
+          didResetAway = true;
+        }
+
+        // Every fresh conn starts as online with base=online. Multi-tab case
+        // where the user is already away: existingStr is present, this block
+        // still computes finalPresence from all existing conns (which will
+        // still have presence='away'), so the new conn's 'online' is
+        // overridden by the away priority and finalPresence stays 'away'.
+        const newConn = { presence: "online", base: "online" };
+
         let user;
-        if (userStr) {
-          user = JSON.parse(userStr);
+        if (existingStr) {
+          user = JSON.parse(existingStr);
           user.conns[connId] = newConn;
         }
         else {
-          user = { presence: initialConnPresence, conns: { [connId]: newConn } };
+          user = { presence: "online", conns: { [connId]: newConn } };
         }
 
         // Recompute final presence honoring away > online > idle across all conns
@@ -456,7 +477,31 @@ const configureWSServer = (wss) => {
         connections.set(connId, { ws });
       });
 
+      // Order matters: push the "unaway" in-band frame BEFORE "ready" so the
+      // client's ready-handler (HomeScreen.tsx) reads the corrected
+      // auth.user.away when it decides which initial presence frame to send.
+      // WS messages are delivered in order to the peer.
+      if (didResetAway) {
+        try { ws.send("unaway"); } catch (e) { /* ignore */ }
+      }
+
       ws.send("ready");
+
+      // On first connection (previously offline), tell every other connected
+      // user that this user is now online. This fills a gap where observers
+      // saw presence.changed:'offline' when the last conn closed but never
+      // saw the offline → online transition on reconnect until the user's
+      // first activity message. The previously-away-but-reset case also goes
+      // through this branch. Self-excluded: this user's own tabs either
+      // already know (multi-tab) or get the "unaway" frame above.
+      if (wasFirstConn) {
+        broadcastToAllConnected({
+          type: 'presence.changed',
+          userId: id,
+          presence: 'online',
+        }, { excludeUserId: id });
+      }
+
       console.log('Client connected');
     }
     catch (err) {
