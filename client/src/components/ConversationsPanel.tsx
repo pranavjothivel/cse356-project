@@ -25,10 +25,9 @@ type Message = {
     id: string;
     conversationId: string;
     authorId: string;
-    content: string | null;
+    content: string;
     createdAt: string;
     editedAt: string | null;
-    deletedAt: string | null;
 };
 
 const API = import.meta.env.VITE_BACKEND_URL;
@@ -95,7 +94,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
 
     const loadMessages = useCallback(async (convId: string) => {
         try {
-            const body = await api(`/conversations/${convId}/messages?limit=100`);
+            const body = await api(`/messages?conversationId=${convId}&limit=100`);
             // Server returns newest-first; flip for display
             setMessages(body.messages.slice().reverse());
         } catch (err: any) { setError(err.message); }
@@ -194,11 +193,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
 
                 case "message.deleted":
                     if (ev.conversationId === selectedId) {
-                        setMessages(prev => prev.map(m =>
-                            m.id === ev.messageId
-                                ? { ...m, content: null, deletedAt: new Date().toISOString() }
-                                : m
-                        ));
+                        setMessages(prev => prev.filter(m => m.id !== ev.messageId));
                     }
                     break;
 
@@ -242,9 +237,9 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     const sendMessage = async () => {
         if (!selected || !draft.trim()) return;
         try {
-            await api(`/conversations/${selected.id}/messages`, {
+            await api(`/messages`, {
                 method: "POST",
-                body: JSON.stringify({ content: draft }),
+                body: JSON.stringify({ conversationId: selected.id, content: draft }),
             });
             setDraft("");
         } catch (err: any) { setError(err.message); }
@@ -258,7 +253,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     const saveEdit = async () => {
         if (!selected || !editingId) return;
         try {
-            await api(`/conversations/${selected.id}/messages/${editingId}`, {
+            await api(`/messages/${editingId}`, {
                 method: "PATCH",
                 body: JSON.stringify({ content: editDraft }),
             });
@@ -270,7 +265,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     const deleteMessage = async (m: Message) => {
         if (!selected) return;
         try {
-            await api(`/conversations/${selected.id}/messages/${m.id}`, { method: "DELETE" });
+            await api(`/messages/${m.id}`, { method: "DELETE" });
         } catch (err: any) { setError(err.message); }
     };
 
@@ -405,19 +400,17 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                             {m.editedAt && " (edited)"}
                                         </span>
                                         <div>
-                                            {m.deletedAt
-                                                ? <em style={{ color: "#aaa" }}>[deleted]</em>
-                                                : editingId === m.id
-                                                    ? (
-                                                        <span>
-                                                            <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
-                                                            <button onClick={saveEdit}>save</button>
-                                                            <button onClick={() => setEditingId(null)}>cancel</button>
-                                                        </span>
-                                                    )
-                                                    : m.content
+                                            {editingId === m.id
+                                                ? (
+                                                    <span>
+                                                        <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
+                                                        <button onClick={saveEdit}>save</button>
+                                                        <button onClick={() => setEditingId(null)}>cancel</button>
+                                                    </span>
+                                                )
+                                                : m.content
                                             }
-                                            {!m.deletedAt && editingId !== m.id && m.authorId === myId && (
+                                            {editingId !== m.id && m.authorId === myId && (
                                                 <span style={{ marginLeft: 8 }}>
                                                     <button style={{ fontSize: 10 }} onClick={() => startEdit(m)}>edit</button>
                                                     <button style={{ fontSize: 10 }} onClick={() => deleteMessage(m)}>delete</button>

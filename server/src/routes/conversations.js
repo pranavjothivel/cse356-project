@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { Op } = require('sequelize');
 
 const sequelize = require('../db');
 const Conversation = require('../models/Conversation');
@@ -9,7 +8,6 @@ const Message = require('../models/Message');
 const User = require('../models/User');
 const { Channel, ChannelMember } = require('../models');
 const { broadcastToUsers } = require('../ws');
-const { buildMessageCursor } = require('../util/messageCursor');
 const { isForwardRead } = require('../util/readReceipts');
 
 // ──────────────────────────────────────────────
@@ -57,19 +55,6 @@ async function listParticipants(conversationId) {
       displayName: u?.display_name || null,
     };
   });
-}
-
-function serializeMessage(m) {
-  return {
-    id: m.id,
-    conversationId: m.conversation_id,
-    authorId: m.author_id,
-    content: m.deleted_at ? null : m.content,
-    createdAt: m.createdAt,
-    editedAt: m.edited_at,
-    deleted: !!m.deleted_at,
-    deletedAt: m.deleted_at,
-  };
 }
 
 function serializeConversation(c, participants, hiddenAt) {
@@ -228,109 +213,6 @@ router.get('/:id', requireAuth, requireMember, async (req, res, next) => {
   try {
     const parts = await listParticipants(req.conversation.id);
     res.json(serializeConversation(req.conversation, parts, req.participant.hidden_at));
-  } catch (err) { next(err); }
-});
-
-// ──────────────────────────────────────────────
-// Messages
-// ──────────────────────────────────────────────
-
-// GET /api/conversations/:id/messages?before=<msgId>&limit=50
-// Cursor-based infinite scroll. Newest-first.
-router.get('/:id/messages', requireAuth, requireMember, async (req, res, next) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const where = { conversation_id: req.conversation.id };
-    if (req.query.before) {
-      const cursorWhere = await buildMessageCursor(req.query.before, 'before');
-      if (cursorWhere) Object.assign(where, cursorWhere);
-    }
-    const messages = await Message.findAll({
-      where,
-      order: [['created_at', 'DESC'], ['id', 'DESC']],
-      limit,
-    });
-    res.json({ messages: messages.map(serializeMessage) });
-  } catch (err) { next(err); }
-});
-
-// POST /api/conversations/:id/messages  { content }
-router.post('/:id/messages', requireAuth, requireMember, async (req, res, next) => {
-  try {
-    const { content } = req.body;
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
-    }
-    const msg = await Message.create({
-      conversation_id: req.conversation.id,
-      author_id: req.user.id,
-      content,
-    });
-
-    // A new message un-hides the conversation for any participant who had hidden it
-    await ConversationParticipant.update(
-      { hidden_at: null },
-      { where: { conversation_id: req.conversation.id, hidden_at: { [Op.ne]: null } } }
-    );
-
-    const parts = await listParticipants(req.conversation.id);
-    broadcastToUsers(parts.map(p => p.userId), {
-      type: 'message.created',
-      conversationId: req.conversation.id,
-      message: serializeMessage(msg),
-    });
-    res.status(201).json(serializeMessage(msg));
-  } catch (err) { next(err); }
-});
-
-// PATCH /api/conversations/:id/messages/:msgId  { content }
-router.patch('/:id/messages/:msgId', requireAuth, requireMember, async (req, res, next) => {
-  try {
-    const { content } = req.body;
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
-    }
-    const msg = await Message.findOne({
-      where: { id: req.params.msgId, conversation_id: req.conversation.id },
-    });
-    if (!msg) return res.status(404).json({ error: 'Not found' });
-    if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    if (msg.deleted_at) return res.status(400).json({ error: 'Cannot edit a deleted message' });
-
-    msg.content = content;
-    msg.edited_at = new Date();
-    await msg.save();
-
-    const parts = await listParticipants(req.conversation.id);
-    broadcastToUsers(parts.map(p => p.userId), {
-      type: 'message.edited',
-      conversationId: req.conversation.id,
-      message: serializeMessage(msg),
-    });
-    res.json(serializeMessage(msg));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/conversations/:id/messages/:msgId
-router.delete('/:id/messages/:msgId', requireAuth, requireMember, async (req, res, next) => {
-  try {
-    const msg = await Message.findOne({
-      where: { id: req.params.msgId, conversation_id: req.conversation.id },
-    });
-    if (!msg) return res.status(404).json({ error: 'Not found' });
-    if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    if (msg.deleted_at) return res.json({ message: 'Already deleted' });
-
-    msg.deleted_at = new Date();
-    await msg.save();
-
-    const parts = await listParticipants(req.conversation.id);
-    broadcastToUsers(parts.map(p => p.userId), {
-      type: 'message.deleted',
-      conversationId: req.conversation.id,
-      messageId: msg.id,
-    });
-    res.json({ message: 'Deleted' });
   } catch (err) { next(err); }
 });
 

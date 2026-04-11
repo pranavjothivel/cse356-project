@@ -144,8 +144,7 @@ router.get('/', requireAuth, async (req, res, next) => {
          m.edited_at
        FROM messages m
        JOIN users u ON u.id = m.author_id
-       WHERE m.deleted_at IS NULL
-         AND ${scopeClause}
+       WHERE ${scopeClause}
          AND to_tsvector('${FTS_CONFIG}', m.content) @@ plainto_tsquery('${FTS_CONFIG}', $1)
          ${extraWhere}
        ORDER BY m.created_at DESC

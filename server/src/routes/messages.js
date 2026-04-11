@@ -26,11 +26,9 @@ function serializeChannelMessage(m) {
       username: m.author.username,
       display_name: m.author.display_name,
     } : null,
-    content: m.deleted_at ? null : m.content,
+    content: m.content,
     createdAt: m.created_at || m.createdAt,
     editedAt: m.edited_at,
-    deleted: !!m.deleted_at,
-    deletedAt: m.deleted_at,
   };
 }
 
@@ -39,11 +37,9 @@ function serializeConversationMessage(m) {
     id: m.id,
     conversationId: m.conversation_id,
     authorId: m.author_id,
-    content: m.deleted_at ? null : m.content,
+    content: m.content,
     createdAt: m.createdAt,
     editedAt: m.edited_at,
-    deleted: !!m.deleted_at,
-    deletedAt: m.deleted_at,
   };
 }
 
@@ -189,7 +185,6 @@ router.patch('/:messageId', async (req, res, next) => {
     const msg = await Message.findByPk(req.params.messageId);
     if (!msg) return res.status(404).json({ error: 'Not found' });
     if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    if (msg.deleted_at) return res.status(400).json({ error: 'Cannot edit a deleted message' });
 
     // Auth: verify caller still belongs to the owning channel/conversation
     if (msg.channel_id) {
@@ -237,36 +232,37 @@ router.delete('/:messageId', async (req, res, next) => {
     const msg = await Message.findByPk(req.params.messageId);
     if (!msg) return res.status(404).json({ error: 'Not found' });
     if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-    if (msg.deleted_at) return res.json({ message: 'Already deleted' });
 
-    if (msg.channel_id) {
+    // Capture IDs before destroy so broadcasts can still fire
+    const { channel_id: channelId, conversation_id: conversationId, id: messageId } = msg;
+
+    if (channelId) {
       const member = await ChannelMember.findOne({
-        where: { channel_id: msg.channel_id, user_id: req.user.id },
+        where: { channel_id: channelId, user_id: req.user.id },
       });
       if (!member) return res.status(403).json({ error: 'Not a channel member' });
-    } else if (msg.conversation_id) {
+    } else if (conversationId) {
       const participant = await ConversationParticipant.findOne({
-        where: { conversation_id: msg.conversation_id, user_id: req.user.id },
+        where: { conversation_id: conversationId, user_id: req.user.id },
       });
       if (!participant) return res.status(403).json({ error: 'Not a conversation participant' });
     }
 
-    msg.deleted_at = new Date();
-    await msg.save();
+    await msg.destroy();
 
-    if (msg.channel_id) {
-      const memberIds = await getChannelMemberIds(msg.channel_id);
+    if (channelId) {
+      const memberIds = await getChannelMemberIds(channelId);
       broadcastToUsers(memberIds, {
         type: 'channel.message.deleted',
-        channelId: msg.channel_id,
-        messageId: msg.id,
+        channelId,
+        messageId,
       });
     } else {
-      const participantIds = await getConversationParticipantIds(msg.conversation_id);
+      const participantIds = await getConversationParticipantIds(conversationId);
       broadcastToUsers(participantIds, {
         type: 'message.deleted',
-        conversationId: msg.conversation_id,
-        messageId: msg.id,
+        conversationId,
+        messageId,
       });
     }
     return res.json({ message: 'Deleted' });
