@@ -20,7 +20,7 @@ const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
 const messagesRouter = require('./routes/messages');
 const redisClient = require('./redis');
-const { configureWSServer } = require('./ws');
+const { configureWSServer, initWS } = require('./ws');
 
 const app = express();
 
@@ -109,6 +109,12 @@ async function start() {
   await sequelize.sync({ alter: process.env.NODE_ENV !== 'production' });
 
   await setupOidcStrategy();
+
+  // Connect + subscribe the Redis pub/sub subscriber before accepting any
+  // requests. If this fails the worker crashes and PM2 restarts it — much
+  // better than silently running with a dead subscriber that drops
+  // presence.changed fanout from the other node.
+  await initWS();
 
   const port = process.env.PORT || 3000;
 

@@ -7,7 +7,8 @@ const path = require('path');
 
 const User = require('../models/User');
 const { upload, minioClient } = require('../upload');
-const { broadcastToAllConnected } = require('../ws');
+const { broadcastToAllConnected, withUserPresenceLock, notifyUserAwayFrame } = require('../ws');
+const redisClient = require('../redis');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -289,14 +290,57 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
     if (away_msg !== undefined) req.user.away_msg = away_msg;
     await req.user.save();
 
-    // Broadcast presence change to all connected users if away status changed
+    // Sync Redis presence state + broadcast if away toggled. Done inside the
+    // per-user presence mutex so it cannot race a concurrent WS presence
+    // message that would otherwise read stale prevFinalPresence and suppress
+    // the broadcast. Spec: away overrides online/idle.
     if (awayChanged) {
-      const presence = away ? 'away' : 'online';
-      broadcastToAllConnected({
-        type: 'presence.changed',
-        userId: req.user.id,
-        presence,
-      }, { excludeUserId: req.user.id });
+      const userId = req.user.id;
+      await withUserPresenceLock(userId, async () => {
+        let finalPresence = away ? 'away' : 'online';
+        const raw = await redisClient.hGet(`users:${userId}`, 'body');
+        if (raw) {
+          const redisUser = JSON.parse(raw);
+          // Preserve per-conn idle/online state across the toggle:
+          //   away=true  — remember each conn's current presence in `base`,
+          //                then set presence='away'
+          //   away=false — restore each conn's presence from `base`
+          // Legacy entries without `base` fall back to 'online'.
+          for (const cid of Object.keys(redisUser.conns)) {
+            const c = redisUser.conns[cid];
+            if (away) {
+              if (c.presence !== 'away') c.base = c.presence;
+              c.presence = 'away';
+            } else {
+              const restore = (c.base === 'idle' || c.base === 'online') ? c.base : 'online';
+              c.presence = restore;
+              c.base = restore;
+            }
+          }
+          // Recompute final presence using the spec priority: away > online > idle
+          finalPresence = 'idle';
+          for (const cid of Object.keys(redisUser.conns)) {
+            const p = redisUser.conns[cid].presence;
+            if (p === 'away') { finalPresence = 'away'; break; }
+            if (p === 'online') finalPresence = 'online';
+          }
+          redisUser.presence = finalPresence;
+          await redisClient.hSet(`users:${userId}`, 'body', JSON.stringify(redisUser));
+        }
+
+        // Notify the user's own sessions (local + cross-server) so their UIs
+        // can flip state. Today only the WS-driven path did this.
+        notifyUserAwayFrame(userId, away ? 'away' : 'unaway');
+
+        // Broadcast presence.changed to every other connected user. `finalPresence`
+        // reflects the recomputed state (so unaway correctly reports 'idle' when
+        // every remaining conn was idle before the away toggle).
+        broadcastToAllConnected({
+          type: 'presence.changed',
+          userId,
+          presence: finalPresence,
+        }, { excludeUserId: userId });
+      });
     }
 
     res.json({ message: 'Profile updated' });
