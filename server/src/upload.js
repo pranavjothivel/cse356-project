@@ -1,6 +1,7 @@
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 
+const BUCKET = 'images';
 const Minio = require('minio');
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_HOST,
@@ -10,4 +11,4 @@ const minioClient = new Minio.Client({
   secretKey: process.env.MINIO_SECRET_KEY
 });
 
-module.exports = { upload, minioClient };
+module.exports = { upload, minioClient, BUCKET };

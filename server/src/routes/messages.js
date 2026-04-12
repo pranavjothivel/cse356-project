@@ -6,6 +6,7 @@ const ConversationParticipant = require('../models/ConversationParticipant');
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { buildMessageCursor } = require('../util/messageCursor');
+const { minioClient, BUCKET } = require('../upload');
 
 const router = Router();
 
@@ -29,6 +30,7 @@ function serializeChannelMessage(m) {
     content: m.content,
     createdAt: m.created_at || m.createdAt,
     editedAt: m.edited_at,
+    attachments: m.attachments
   };
 }
 
@@ -181,10 +183,14 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/messages/:messageId { content }
 router.patch('/:messageId', async (req, res, next) => {
   try {
-    const { content } = req.body;
+    const { content, attachments } = req.body;
     if (typeof content !== 'string' || content.length === 0) {
       return res.status(400).json({ error: 'content is required' });
     }
+    if (attachments && attachments.length > 4) {
+      return res.status(400).json({ error: 'Too many attachments. Limit is 4' });
+    }
+    
     const msg = await Message.findByPk(req.params.messageId);
     if (!msg) return res.status(404).json({ error: 'Not found' });
     if (msg.author_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
@@ -202,7 +208,29 @@ router.patch('/:messageId', async (req, res, next) => {
       if (!participant) return res.status(403).json({ error: 'Not a conversation participant' });
     }
 
+    // Delete images not in the new attachments list
+    // Since there is no easy "undoing" of MinIO removal, just accept failures
+    try {
+      if (attachments) {
+        for (let i = 0; i < msg.attachments.length; i++) {
+          let keepAttachment = false;
+          for (let j = 0; j < attachments.length; j++) {
+            if (msg.attachments[i] === attachments[j]) {
+              keepAttachment = true;
+              break;
+            }
+          }
+
+          if (!keepAttachment) {
+            await minioClient.removeObject(BUCKET, msg.attachments[i]);
+          }
+        }
+      }
+    }
+    catch (err) {}
+
     msg.content = content;
+    msg.attachments = attachments;
     msg.edited_at = new Date();
     await msg.save();
 
@@ -238,6 +266,15 @@ router.delete('/:messageId', async (req, res, next) => {
 
     // Capture IDs before destroy so broadcasts can still fire
     const { channel_id: channelId, conversation_id: conversationId, id: messageId } = msg;
+
+    // Delete images
+    // Since there is no easy "undoing" of MinIO removal, just accept failures
+    try {
+      for (let i = 0; i < msg.attachments.length; i++) {
+          await minioClient.removeObject(BUCKET, msg.attachments[i]);
+      }
+    }
+    catch (err) {}
 
     if (channelId) {
       const member = await ChannelMember.findOne({
