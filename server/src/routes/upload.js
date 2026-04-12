@@ -2,14 +2,12 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const crypto = require('crypto');
-const { upload, minioClient } = require('../upload');
+const { upload, minioClient, BUCKET } = require('../upload');
 
 function requireAuth(req, res, next) {
   if (req.isAuthenticated()) return next();
   res.status(401).json({ error: 'Not authenticated' });
 }
-
-const BUCKET = 'images';
 
 // POST /api/upload
 // Accepts a single image file, uploads to MinIO, returns { url }.

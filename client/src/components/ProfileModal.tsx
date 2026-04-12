@@ -155,7 +155,7 @@ export default function ProfileModal({ closeCallback } : any) {
                             width="50px"
                             height="50px"
                             style={{objectFit: "cover", borderRadius: "4px", background: "#444"}}
-                            src={avatarSrc}
+                            src={avatarSrc ? avatarSrc : undefined}
                         />
                         <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
                         {pendingAvatarFile && <button onClick={handleSaveAvatar}>Save Avatar</button>}
