@@ -120,6 +120,9 @@ router.post('/', async (req, res, next) => {
     if (typeof content !== 'string' || content.length === 0) {
       return res.status(400).json({ error: 'content is required' });
     }
+    if (attachments && attachments.length > 4) {
+      return res.status(400).json({ error: 'Too many attachments. Limit is 4' });
+    }
 
     if (channelId) {
       const member = await ChannelMember.findOne({

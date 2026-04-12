@@ -40,8 +40,10 @@ export default function ChannelView({ channelId, channelName }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [error, setError] = useState("");
+  const [attachments, setAttachments] = useState<any[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const markAsRead = useCallback((msgId: string) => {
     if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
@@ -108,9 +110,29 @@ export default function ChannelView({ channelId, channelName }: Props) {
   const sendMessage = async () => {
     if (!draft.trim()) return;
     setError("");
-    const res = await apiPost(`/messages`, { channelId, content: draft });
+
+    let attachmentsToSend = [];
+    for (let i = 0; i < attachments.length; i++) {
+      const formData = new FormData();
+      formData.append("image", attachments[i].file);
+      let uploadRes = await fetch(import.meta.env.VITE_BACKEND_URL + "/upload", {
+          method: "POST",
+          credentials: "include",
+          body: formData
+      });
+      if (!uploadRes.ok) {
+        const body = await uploadRes.json().catch(() => ({}));
+        setError(body.error || "Failed to upload images");
+        return;
+      }
+      const { url } = await uploadRes.json();
+      attachmentsToSend.push(url);
+    }
+
+    const res = await apiPost(`/messages`, { channelId, content: draft, attachments: attachmentsToSend });
     if (res.ok) {
       setDraft("");
+      setAttachments([]);
     } else {
       const body = await res.json().catch(() => ({}));
       setError(body.error || "Failed to send");
@@ -141,6 +163,31 @@ export default function ChannelView({ channelId, channelName }: Props) {
       setError(body.error || "Failed to delete");
     }
   };
+
+  const attach = async (event: any) => {
+    if (event.target.files) {
+      if (attachments.length + event.target.files.length > 4) {
+        setError("Too many attachments. Limit is 4");
+        return;
+      }
+
+      let newAttachments = [...attachments];
+      let errMsg = "";
+      for (let i = 0; i < event.target.files.length; i++) {
+        let file = event.target.files[i];
+        const url = URL.createObjectURL(file);
+        newAttachments.push({src: url, file});
+      }
+
+      setAttachments(newAttachments);
+      if (errMsg !== "") setError(errMsg);
+    }
+  }
+
+  const unAttach = async (index: number) => {
+    let newAttachments = [...attachments.slice(0, index), ...attachments.slice(index+1)];
+    setAttachments(newAttachments);
+  }
 
   return (
     <div className="channel-view" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -205,6 +252,18 @@ export default function ChannelView({ channelId, channelName }: Props) {
         </div>
       )}
 
+      <div style={{ padding: "8px 12px", borderTop: "1px solid #333", display: "flex"}}> 
+        {attachments.map((attachment, index) => (
+          <div key={"attachment-container-" + index} style={{position: "relative"}}>
+            <img 
+              src={attachment.src}
+              width="128px"
+              height="128px"
+            />
+            <button className="btn-small btn-danger" style={{position: "absolute", top: "0", right: "0"}} onClick={() => {unAttach(index)}}>Remove</button>
+          </div>
+        ))}
+      </div>
       {/* Input bar */}
       <div style={{ padding: "8px 12px", borderTop: "1px solid #333", display: "flex", gap: 8, flexShrink: 0 }}>
         <input
@@ -215,6 +274,8 @@ export default function ChannelView({ channelId, channelName }: Props) {
           placeholder={`Message #${channelName}`}
           style={{ flex: 1 }}
         />
+        <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+        <button className="btn-small" onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
         <button className="btn-small" onClick={sendMessage}>Send</button>
       </div>
     </div>
