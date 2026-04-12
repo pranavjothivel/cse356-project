@@ -42,6 +42,7 @@ function serializeConversationMessage(m) {
     content: m.content,
     createdAt: m.createdAt,
     editedAt: m.edited_at,
+    attachments: m.attachments
   };
 }
 

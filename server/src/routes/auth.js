@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const path = require('path');
 
 const User = require('../models/User');
-const { upload, minioClient } = require('../upload');
+const { minioClient, BUCKET } = require('../upload');
 const { broadcastToAllConnected, withUserPresenceLock, notifyUserAwayFrame } = require('../ws');
 const redisClient = require('../redis');
 
@@ -354,8 +354,16 @@ router.post('/settings/avatar', requireAuth, async (req, res, next) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'url is required' });
+    const oldAvatar = req.user.avatar;
     req.user.avatar = url;
     await req.user.save();
+
+    // Remove old avatar (ignore failure)
+    try {
+      await minioClient.removeObject(BUCKET, oldAvatar);
+    }
+    catch (err) {}
+
     res.json({ url });
   } catch (err) {
     next(err);

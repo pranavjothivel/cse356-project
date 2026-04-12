@@ -28,6 +28,7 @@ type Message = {
     content: string;
     createdAt: string;
     editedAt: string | null;
+    attachments: string[]
 };
 
 const API = import.meta.env.VITE_BACKEND_URL;
@@ -62,6 +63,10 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState("");
     const [error, setError] = useState<string>("");
+    const [attachments, setAttachments] = useState<any[]>([]);
+    const [editAttachments, setEditAttachments] = useState<any[]>([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const editFileInputRef = useRef<HTMLInputElement>(null);
 
     // "New conversation" modal
     const [showNewModal, setShowNewModal] = useState(false);
@@ -236,29 +241,79 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
 
     const sendMessage = async () => {
         if (!selected || !draft.trim()) return;
+
+        let attachmentsToSend = [];
+        for (let i = 0; i < attachments.length; i++) {
+            const formData = new FormData();
+            formData.append("image", attachments[i].file);
+            let uploadRes = await fetch(import.meta.env.VITE_BACKEND_URL + "/upload", {
+                method: "POST",
+                credentials: "include",
+                body: formData
+            });
+            if (!uploadRes.ok) {
+                const body = await uploadRes.json().catch(() => ({}));
+                setError(body.error || "Failed to upload images");
+                return;
+            }
+            const { url } = await uploadRes.json();
+            attachmentsToSend.push(url);
+        }
         try {
             await api(`/messages`, {
                 method: "POST",
-                body: JSON.stringify({ conversationId: selected.id, content: draft }),
+                body: JSON.stringify({ conversationId: selected.id, content: draft, attachments: attachmentsToSend }),
             });
             setDraft("");
+            setAttachments([]);
         } catch (err: any) { setError(err.message); }
     };
 
     const startEdit = (m: Message) => {
         setEditingId(m.id);
         setEditDraft(m.content || "");
+
+        let newEditAttachments = [];
+        for (let i = 0; i < m.attachments.length; i++) {
+            newEditAttachments.push({
+                src: import.meta.env.VITE_IMAGE_URL + "/" + m.attachments[i],
+                url: m.attachments[i]
+            });
+        }
+        setEditAttachments(newEditAttachments);
     };
 
     const saveEdit = async () => {
         if (!selected || !editingId) return;
+
+        let attachmentsToSend = [];
+        for (let i = 0; i < editAttachments.length; i++) {
+            if (editAttachments[i].url) attachmentsToSend.push(editAttachments[i].url);
+            else {
+                const formData = new FormData();
+                formData.append("image", editAttachments[i].file);
+                let uploadRes = await fetch(import.meta.env.VITE_BACKEND_URL + "/upload", {
+                    method: "POST",
+                    credentials: "include",
+                    body: formData
+                });
+                if (!uploadRes.ok) {
+                const body = await uploadRes.json().catch(() => ({}));
+                setError(body.error || "Failed to upload images");
+                return;
+                }
+                const { url } = await uploadRes.json();
+                attachmentsToSend.push(url);
+            }
+        }
         try {
             await api(`/messages/${editingId}`, {
                 method: "PATCH",
-                body: JSON.stringify({ content: editDraft }),
+                body: JSON.stringify({ content: editDraft, attachments: attachmentsToSend }),
             });
             setEditingId(null);
             setEditDraft("");
+            setEditAttachments([]);
         } catch (err: any) { setError(err.message); }
     };
 
@@ -306,6 +361,56 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
             await loadConversations();
         } catch (err: any) { setError(err.message); }
     };
+
+
+    const attach = async (event: any) => {
+        if (event.target.files) {
+        if (attachments.length + event.target.files.length > 4) {
+            setError("Too many attachments. Limit is 4");
+            return;
+        }
+
+        let newAttachments = [...attachments];
+        let errMsg = "";
+        for (let i = 0; i < event.target.files.length; i++) {
+            let file = event.target.files[i];
+            const url = URL.createObjectURL(file);
+            newAttachments.push({src: url, file});
+        }
+
+        setAttachments(newAttachments);
+        if (errMsg !== "") setError(errMsg);
+        }
+    }
+    const unAttach = async (index: number) => {
+        let newAttachments = [...attachments.slice(0, index), ...attachments.slice(index+1)];
+        setAttachments(newAttachments);
+    }
+
+    const editAttach = async (event: any) => {
+        if (event.target.files) {
+        if (editAttachments.length + event.target.files.length > 4) {
+            setError("Too many attachments. Limit is 4");
+            return;
+        }
+
+        let newAttachments = [...editAttachments];
+        let errMsg = "";
+        for (let i = 0; i < event.target.files.length; i++) {
+            let file = event.target.files[i];
+            const url = URL.createObjectURL(file);
+            newAttachments.push({src: url, file});
+        }
+
+        setEditAttachments(newAttachments);
+        if (errMsg !== "") setError(errMsg);
+        }
+    }
+    const editUnAttach = async (index: number) => {
+        let newAttachments = [...editAttachments.slice(0, index), ...editAttachments.slice(index+1)];
+        setEditAttachments(newAttachments);
+    }
+
 
     // ---- Render -----------------------------------------------------------
     const visible = conversations.filter(c => showHidden || !c.hidden);
@@ -404,6 +509,8 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                                 ? (
                                                     <span>
                                                         <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
+                                                        <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                                                        <button onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                                                         <button onClick={saveEdit}>save</button>
                                                         <button onClick={() => setEditingId(null)}>cancel</button>
                                                     </span>
@@ -417,6 +524,32 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                                 </span>
                                             )}
                                         </div>
+                                        {editingId === m.id ? (
+                                            <div style={{ padding: "8px 12px", display: "flex"}}> 
+                                                {editAttachments.map((attachment, index) => (
+                                                <div key={`attachment-container-${m.id}-${index}`} style={{position: "relative", margin: "0 8px"}}>
+                                                    <img 
+                                                    src={attachment.src}
+                                                    width="128px"
+                                                    height="128px"
+                                                    />
+                                                    <button style={{position: "absolute", top: "0", right: "0"}} onClick={() => {editUnAttach(index)}}>Remove</button>
+                                                </div>
+                                                ))}
+                                            </div>
+                                        ): (
+                                            <div style={{ padding: "8px 12px", display: "flex"}}> 
+                                                {m.attachments.map((attachment, index) => (
+                                                <div key={`attachment-container-${m.id}-${index}`} style={{position: "relative", margin: "0 8px"}}>
+                                                    <img 
+                                                    src={import.meta.env.VITE_IMAGE_URL + "/" + attachment}
+                                                    width="128px"
+                                                    height="128px"
+                                                    />
+                                                </div>
+                                                ))}
+                                            </div>
+                                        )}
                                         {readers.length > 0 && (
                                             <div style={{ fontSize: 10, color: "#6a9f6a", marginTop: 1 }}>
                                                 Read by {readers.join(", ")}
@@ -426,6 +559,18 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                 );
                             })}
                             <div ref={messagesEndRef} />
+                        </div>
+                        <div style={{ padding: "8px 12px", borderTop: "1px solid #333", display: "flex"}}> 
+                            {attachments.map((attachment, index) => (
+                            <div key={"attachment-container-" + index} style={{position: "relative", margin: "0 8px"}}>
+                                <img 
+                                src={attachment.src}
+                                width="128px"
+                                height="128px"
+                                />
+                                <button className="btn-small btn-danger" style={{position: "absolute", top: "0", right: "0"}} onClick={() => {unAttach(index)}}>Remove</button>
+                            </div>
+                            ))}
                         </div>
                         <div style={{ padding: 8, borderTop: "1px solid #444", background: "#2a2a2a", display: "flex", gap: 4 }}>
                             <input
@@ -441,6 +586,8 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                     padding: "4px 6px",
                                 }}
                             />
+                            <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+                            <button onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
                             <button onClick={sendMessage}>send</button>
                         </div>
                     </div>
