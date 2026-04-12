@@ -27,6 +27,57 @@ const app = express();
 // Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
 app.set('trust proxy', 1);
 
+
+/**
+ * route -> { reqs (number of requests), sumResponse (sum of response times) }
+ */
+let metrics = new Map();
+
+app.use((req, res, next) => {
+  // Make sure to replace uuid route params with :id
+  let route = req.method + " " + req.path.replaceAll(/[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*/g, ':id');
+
+  let date1 = Date.now();
+  res.on('finish', () => {
+    try {
+      let date2 = Date.now();
+      let metric = metrics.get(route);
+      if (!metric) {
+        metric = {reqs: 0, sumResponse: 0}
+      }
+      metric.reqs++;
+      metric.sumResponse += date2 - date1;
+      metrics.set(route, metric);
+    }
+    catch (err) {}
+  });
+  next();
+});
+
+// GET /metrics?sort=[name or reqs or avg]
+app.get('/metrics', (req, res, next) => {
+  try {
+    let { sort } = req.query;
+    if (!sort) sort = "name";
+
+    let metricsArray = [...metrics];
+    if (sort === "name") metricsArray.sort();
+    else if (sort === "reqs") metricsArray.sort((a, b) => b[1].reqs - a[1].reqs);
+    else if (sort === "avg") metricsArray.sort((a, b) => b[1].sumResponse / b[1].reqs - a[1].sumResponse / a[1].reqs);
+
+    let html = '';
+    metricsArray.forEach((v) => {
+      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}</p>`;
+    });
+    return res.send(html);
+  }
+  catch (err) {
+    console.log(err);
+    return res.sendStatus(500);
+  }
+});
+
+
 // ──────────────────────────────────────────────
 // Middleware
 // ──────────────────────────────────────────────
