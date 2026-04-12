@@ -54,8 +54,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// GET /metrics?sort=[name or reqs or avg]
-app.get('/metrics', (req, res, next) => {
+// GET /api/metrics?sort=[name or reqs or avg]
+app.get('/api/metrics', (req, res, next) => {
   try {
     let { sort } = req.query;
     if (!sort) sort = "name";
