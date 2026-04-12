@@ -9,19 +9,20 @@ const redisClient = require('./redis');
 // Identifier that should be sent when publishing through Redis
 const serverId = crypto.randomUUID();
 
-// subClient is dedicated to receiving updates published by other instances
+// subClient is dedicated to receiving updates published by other instances.
+// Connection + subscription are awaited in initWS() before the HTTP server
+// starts accepting requests, so presence fanout cannot be silently missed
+// during the startup window.
 const subClient = redisClient.duplicate();
-subClient.connect();
-subClient.on('ready', () => {
-  console.log("Redis subscriber connected");
-});
-subClient.subscribe('messages', (msg) => {
-  try {
-    msg = JSON.parse(msg);
-    // Ignore messages you published
-    if (msg.serverId === serverId) return;
+subClient.on('error', (err) => console.error('Redis subscriber error:', err));
 
-    msg = msg.msg;
+function handleSubMessage(raw) {
+  try {
+    const envelope = JSON.parse(raw);
+    // Ignore messages you published
+    if (envelope.serverId === serverId) return;
+
+    const msg = envelope.msg;
 
     if (msg.type === "presence") {
       let conns = users.get(msg.id);
@@ -29,12 +30,12 @@ subClient.subscribe('messages', (msg) => {
 
       if (msg.value === "away") {
         Object.keys(conns).forEach((k) => {
-          conns[k].send("away");
+          try { conns[k].send("away"); } catch (e) { /* ignore broken socket */ }
         });
       }
       else if (msg.value === "unaway") {
         Object.keys(conns).forEach((k) => {
-          conns[k].send("unaway");
+          try { conns[k].send("unaway"); } catch (e) { /* ignore broken socket */ }
         });
       }
     }
@@ -52,12 +53,44 @@ subClient.subscribe('messages', (msg) => {
         }
       }
     }
-
   }
   catch (err) {
-    console.log(err);
+    console.error('Redis subscriber handler error:', err);
   }
-});
+}
+
+/**
+ * Initialize the Redis subscriber. Must be awaited from app startup before
+ * the HTTP server begins accepting requests — otherwise fanout_all messages
+ * published by other workers during the startup window would be dropped.
+ */
+async function initWS() {
+  await subClient.connect();
+  await subClient.subscribe('messages', handleSubMessage);
+  console.log("Redis subscriber connected");
+}
+
+// ──────────────────────────────────────────────
+// Per-user presence mutex
+// ──────────────────────────────────────────────
+// Multiple code paths mutate users:<id> in Redis via read-modify-write:
+//   - WS 'presence' message handler
+//   - WS 'close' handler
+//   - REST POST /auth/settings/update-profile (via withUserPresenceLock)
+// Without serialization, two in-flight mutations for the same user can both
+// read the same prevFinalPresence and one of their presence.changed broadcasts
+// gets suppressed because prev == new. The mutex is per-user so cross-user
+// events never block each other.
+const presenceLocks = new Map();
+function withUserPresenceLock(userId, fn) {
+  const prev = presenceLocks.get(userId) || Promise.resolve();
+  const next = prev.then(fn, fn).finally(() => {
+    // Clean up once the chain tail equals this entry — avoids unbounded growth.
+    if (presenceLocks.get(userId) === next) presenceLocks.delete(userId);
+  });
+  presenceLocks.set(userId, next);
+  return next;
+}
 
 
 
@@ -145,6 +178,30 @@ function broadcastToUsers(userIds, payload) {
 }
 
 /**
+ * Send the in-band "away"/"unaway" WS frame to every session of `userId`
+ * across the cluster. Used when the user's away state is changed via a path
+ * that isn't already a WS message (e.g. REST POST /auth/settings/update-profile),
+ * so their other tabs can flip state. Cross-server delivery happens via the
+ * existing `{type:'presence'}` Redis pub/sub handler; local delivery happens
+ * inline so same-node sessions aren't skipped by the `serverId` self-check.
+ */
+function notifyUserAwayFrame(userId, value) {
+  if (value !== 'away' && value !== 'unaway') return;
+  // Local delivery
+  const conns = users.get(userId);
+  if (conns) {
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(value); } catch (e) { /* ignore broken socket */ }
+    }
+  }
+  // Cross-server fanout
+  redisClient.publish('messages', JSON.stringify({
+    serverId,
+    msg: { id: userId, type: 'presence', value },
+  }));
+}
+
+/**
  * Fan out a JSON payload to every currently connected WS session across the cluster.
  * Used for presence.changed — we want any connected user to observe presence transitions,
  * regardless of whether they share a community or DM with the subject.
@@ -189,120 +246,160 @@ const configureWSServer = (wss) => {
     ws.on('message', async (data) => {
       try {
         const msg = JSON.parse(data);
-   
+
         if (msg.type === 'presence') {
-          let newPresence = msg.value;
+          const newPresence = msg.value;
 
           if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
 
-          let conns = users.get(id);
-          let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
-          const prevFinalPresence = redisUser.presence;
+          // Serialize the read-modify-write block per user so two in-flight
+          // presence updates cannot race each other's prevFinalPresence check
+          // and suppress a legitimate presence.changed broadcast.
+          await withUserPresenceLock(id, async () => {
+            const conns = users.get(id);
+            const raw = await redisClient.hGet(`users:${id}`, "body");
+            if (!raw) return; // connection closed between reads
+            const redisUser = JSON.parse(raw);
+            const prevFinalPresence = redisUser.presence;
 
-          if (newPresence === "away") {
-            // Set each of the user's connections to away and notify them
-            Object.keys(redisUser.conns).forEach((k) => {
-              if (conns[k]) conns[k].send("away");
-              redisUser.conns[k].presence = "away";
-            });
-          }
-          else if (newPresence === "unaway") {
-            // Set each of the user's connections to online and notify them
-            Object.keys(redisUser.conns).forEach((k) => {
-              if (conns[k]) conns[k].send("unaway");
-              redisUser.conns[k].presence = "online";
-            });
-          }
-          else {
-            const user = await User.findOne({ where: { id } });
-            // Don't override away if user has it set
-            if (!user || !user.away) {
-              redisUser.conns[connId].presence = newPresence;
+            if (newPresence === "away") {
+              // Set each of the user's connections to away and notify them.
+              // Remember each conn's pre-away idle/online state in `base`
+              // so unaway can restore it instead of slamming every conn to
+              // 'online'.
+              Object.keys(redisUser.conns).forEach((k) => {
+                const c = redisUser.conns[k];
+                if (c.presence !== "away") c.base = c.presence;
+                c.presence = "away";
+                if (conns && conns[k]) {
+                  try { conns[k].send("away"); } catch (e) { /* ignore */ }
+                }
+              });
             }
-          }
+            else if (newPresence === "unaway") {
+              // Restore each conn's remembered idle/online state. Fall back
+              // to 'online' if `base` is missing (legacy entries written
+              // before the base field existed).
+              Object.keys(redisUser.conns).forEach((k) => {
+                const c = redisUser.conns[k];
+                const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
+                c.presence = restore;
+                c.base = restore;
+                if (conns && conns[k]) {
+                  try { conns[k].send("unaway"); } catch (e) { /* ignore */ }
+                }
+              });
+            }
+            else {
+              const user = await User.findOne({ where: { id } });
+              const c = redisUser.conns[connId];
+              if (c) {
+                if (!user || !user.away) {
+                  // Not away: the conn's effective presence tracks activity.
+                  c.presence = newPresence;
+                  c.base = newPresence;
+                } else {
+                  // Away: keep `presence:'away'` as the override, but update
+                  // `base` so a later unaway restores the conn to the current
+                  // idle/online state rather than the state at away-time.
+                  c.base = newPresence;
+                }
+              }
+            }
 
-          // Determine final display presence: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
-          }
-          redisUser.presence = finalPresence;
+            // Determine final display presence: away > online > idle
+            let finalPresence = "idle";
+            for (const cid of Object.keys(redisUser.conns)) {
+              const p = redisUser.conns[cid].presence;
+              if (p === "away") { finalPresence = "away"; break; }
+              if (p === "online") finalPresence = "online";
+            }
+            redisUser.presence = finalPresence;
 
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+            await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Sync user's own other sessions (cross-server) for away/unaway
-          if (newPresence === "away" || newPresence === "unaway") {
-            redisClient.publish("messages", JSON.stringify({
-              serverId,
-              msg: { id, type: msg.type, value: msg.value }
-            }));
-          }
+            // Sync user's own other sessions (cross-server) for away/unaway
+            if (newPresence === "away" || newPresence === "unaway") {
+              redisClient.publish("messages", JSON.stringify({
+                serverId,
+                msg: { id, type: msg.type, value: msg.value }
+              }));
+            }
 
-          // Broadcast to all connected users whenever final presence actually changed
-          if (finalPresence !== prevFinalPresence) {
-            broadcastToAllConnected({
-              type: 'presence.changed',
-              userId: id,
-              presence: finalPresence,
-            }, { excludeUserId: id });
-          }
+            // Broadcast to all connected users whenever final presence actually changed
+            if (finalPresence !== prevFinalPresence) {
+              broadcastToAllConnected({
+                type: 'presence.changed',
+                userId: id,
+                presence: finalPresence,
+              }, { excludeUserId: id });
+            }
+          });
         }
 
       }
       catch (err) {
         console.log(err);
-        ws.send('error');
+        try { ws.send('error'); } catch (e) { /* ignore */ }
         ws.close();
       }
     });
 
     ws.on('close', async () => {
+      if (!id) return; // init failed, nothing to clean up
       try {
-        let redisUser = JSON.parse(await redisClient.hGet(`users:${id}`, "body"));
-        const arr = Object.keys(redisUser.conns);
-
-        connections.delete(connId);
-
-        if (arr.length === 1) {
-          // Last connection — user is now offline
-          await redisClient.del(`users:${id}`);
-          users.delete(id);
-          // Broadcast offline to all connected users
-          broadcastToAllConnected({
-            type: 'presence.changed',
-            userId: id,
-            presence: 'offline',
-          }, { excludeUserId: id });
-        }
-        else {
-          delete redisUser.conns[connId];
-          delete users.get(id)[connId];
-
-          // Recalculate presence with remaining connections: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
+        await withUserPresenceLock(id, async () => {
+          const raw = await redisClient.hGet(`users:${id}`, "body");
+          if (!raw) {
+            // Already cleaned up (e.g. by a concurrent close)
+            connections.delete(connId);
+            return;
           }
+          const redisUser = JSON.parse(raw);
+          const connIds = Object.keys(redisUser.conns);
 
-          // Broadcast if presence changed (e.g. the closing tab was the only online one)
-          if (finalPresence !== redisUser.presence) {
-            redisUser.presence = finalPresence;
+          connections.delete(connId);
+
+          // "Last connection" is determined by whether this close removes the
+          // only remaining conn — check against the conn set that actually
+          // contains our connId to avoid racing with a concurrent init.
+          if (connIds.length <= 1 && redisUser.conns[connId]) {
+            await redisClient.del(`users:${id}`);
+            users.delete(id);
             broadcastToAllConnected({
               type: 'presence.changed',
               userId: id,
-              presence: finalPresence,
+              presence: 'offline',
             }, { excludeUserId: id });
           }
+          else {
+            delete redisUser.conns[connId];
+            const localConns = users.get(id);
+            if (localConns) delete localConns[connId];
 
-          redisUser.presence = finalPresence;
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-        }
+            // Recalculate presence with remaining connections: away > online > idle
+            let finalPresence = "idle";
+            for (const cid of Object.keys(redisUser.conns)) {
+              const p = redisUser.conns[cid].presence;
+              if (p === "away") { finalPresence = "away"; break; }
+              if (p === "online") finalPresence = "online";
+            }
 
-        console.log('Client disconnected');
+            const prevFinalPresence = redisUser.presence;
+            redisUser.presence = finalPresence;
+            await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+
+            if (finalPresence !== prevFinalPresence) {
+              broadcastToAllConnected({
+                type: 'presence.changed',
+                userId: id,
+                presence: finalPresence,
+              }, { excludeUserId: id });
+            }
+          }
+
+          console.log('Client disconnected');
+        });
       }
       catch (err) {
         console.log(err);
@@ -311,34 +408,100 @@ const configureWSServer = (wss) => {
 
 
     // Initialization
+    let didResetAway = false;
+    let wasFirstConn = false;
     try {
       // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
       const token = url.searchParams.get('token');
       id = jwt.verify(token, process.env.JWT_SECRET).id;
 
-      let userStr = await redisClient.hGet(`users:${id}`, "body");
+      const dbUser = await User.findByPk(id);
 
-      let user;
-      if (userStr) {
-        user = JSON.parse(userStr);
-        user.conns[connId] = {presence: "online"};
-      }
-      else {
-        user = {presence: "online", conns: { [connId]: {presence: "online"} }};
-      }
-      await redisClient.hSet(`users:${id}`, "body", JSON.stringify(user));
+      // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
+      // says "disconnect/reconnect doesn't count as activity", which we read
+      // as: a reconnect is a fresh session, not a continuation. We only
+      // reset on a user's FIRST live connection (redis hash empty) — opening
+      // a second tab while already connected leaves away alone, so users can
+      // still set away and have it persist across tabs within a session.
+      //
+      // The reset happens BEFORE we create the new conn in Redis, and we
+      // push an "unaway" frame on this socket before "ready" so the client's
+      // auth state flips before HomeScreen's ready-handler reads
+      // auth.user.away and sends the initial presence frame.
 
-      let conns = users.get(id);
-      if (!conns) {
-        conns = {[connId]: ws};
-        users.set(id, conns);
-      }
-      else conns[connId] = ws;
-      connections.set(connId, { ws });
+      await withUserPresenceLock(id, async () => {
+        const existingStr = await redisClient.hGet(`users:${id}`, "body");
+        const isFirstConn = !existingStr;
+        wasFirstConn = isFirstConn;
 
-      connReady = true;
+        if (isFirstConn && dbUser && dbUser.away) {
+          dbUser.away = false;
+          await dbUser.save();
+          didResetAway = true;
+        }
+
+        // Every fresh conn starts as online with base=online. Multi-tab case
+        // where the user is already away: existingStr is present, this block
+        // still computes finalPresence from all existing conns (which will
+        // still have presence='away'), so the new conn's 'online' is
+        // overridden by the away priority and finalPresence stays 'away'.
+        const newConn = { presence: "online", base: "online" };
+
+        let user;
+        if (existingStr) {
+          user = JSON.parse(existingStr);
+          user.conns[connId] = newConn;
+        }
+        else {
+          user = { presence: "online", conns: { [connId]: newConn } };
+        }
+
+        // Recompute final presence honoring away > online > idle across all conns
+        let finalPresence = "idle";
+        for (const cid of Object.keys(user.conns)) {
+          const p = user.conns[cid].presence;
+          if (p === "away") { finalPresence = "away"; break; }
+          if (p === "online") finalPresence = "online";
+        }
+        user.presence = finalPresence;
+
+        await redisClient.hSet(`users:${id}`, "body", JSON.stringify(user));
+
+        let conns = users.get(id);
+        if (!conns) {
+          conns = { [connId]: ws };
+          users.set(id, conns);
+        }
+        else conns[connId] = ws;
+        connections.set(connId, { ws });
+      });
+
+      // Order matters: push the "unaway" in-band frame BEFORE "ready" so the
+      // client's ready-handler (HomeScreen.tsx) reads the corrected
+      // auth.user.away when it decides which initial presence frame to send.
+      // WS messages are delivered in order to the peer.
+      if (didResetAway) {
+        try { ws.send("unaway"); } catch (e) { /* ignore */ }
+      }
+
       ws.send("ready");
+
+      // On first connection (previously offline), tell every other connected
+      // user that this user is now online. This fills a gap where observers
+      // saw presence.changed:'offline' when the last conn closed but never
+      // saw the offline → online transition on reconnect until the user's
+      // first activity message. The previously-away-but-reset case also goes
+      // through this branch. Self-excluded: this user's own tabs either
+      // already know (multi-tab) or get the "unaway" frame above.
+      if (wasFirstConn) {
+        broadcastToAllConnected({
+          type: 'presence.changed',
+          userId: id,
+          presence: 'online',
+        }, { excludeUserId: id });
+      }
+
       console.log('Client connected');
     }
     catch (err) {
@@ -349,4 +512,12 @@ const configureWSServer = (wss) => {
   });
 }
 
-module.exports = { configureWSServer, broadcastToUsers, broadcastToAllConnected, getCoCommunityUserIds };
+module.exports = {
+  configureWSServer,
+  broadcastToUsers,
+  broadcastToAllConnected,
+  notifyUserAwayFrame,
+  getCoCommunityUserIds,
+  initWS,
+  withUserPresenceLock,
+};

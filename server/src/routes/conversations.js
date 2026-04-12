@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { Op } = require('sequelize');
 
 const sequelize = require('../db');
 const Conversation = require('../models/Conversation');
@@ -9,6 +10,11 @@ const User = require('../models/User');
 const { Channel, ChannelMember } = require('../models');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
+
+// Matches a canonical UUID v1-v5. Used to guard :id params so literal path
+// segments like "unread" don't reach Sequelize as UUID query values and
+// blow up Postgres with 22P02 (invalid input syntax for type uuid).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -20,8 +26,12 @@ function requireAuth(req, res, next) {
 }
 
 // Membership check. Returns 404 (not 403) for non-members so existence isn't leaked.
+// Also 404 on non-UUID :id to avoid forwarding garbage into Sequelize's UUID bind.
 async function requireMember(req, res, next) {
   try {
+    if (!UUID_RE.test(req.params.id)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     const conv = await Conversation.findByPk(req.params.id);
     if (!conv) return res.status(404).json({ error: 'Not found' });
     const part = await ConversationParticipant.findOne({
@@ -208,6 +218,79 @@ router.get('/', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/conversations/unread
+// Returns the subset of the user's conversations that currently have unread
+// messages (i.e. at least one message with created_at strictly after the
+// participant's last_read_message). Must be declared BEFORE the /:id route
+// so Express doesn't match "unread" as a UUID param and crash requireMember.
+router.get('/unread', requireAuth, async (req, res, next) => {
+  try {
+    const myParts = await ConversationParticipant.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['conversation_id', 'last_read_message_id', 'hidden_at', 'joined_at'],
+    });
+    if (myParts.length === 0) return res.json({ conversations: [] });
+
+    // Resolve each participant's last-read message's createdAt (parallel).
+    const lastReadIds = myParts.map(p => p.last_read_message_id).filter(Boolean);
+    const lastReadRows = lastReadIds.length > 0
+      ? await Message.findAll({ where: { id: lastReadIds }, attributes: ['id', 'createdAt'] })
+      : [];
+    const lastReadMap = new Map(lastReadRows.map(m => [m.id, m]));
+
+    // Check each conversation for a message strictly newer than last-read.
+    // Uses the same tie-break (createdAt, id) as the channels unread check in
+    // communities.js so the two are consistent.
+    const unreadConvIds = [];
+    for (const p of myParts) {
+      const where = { conversation_id: p.conversation_id };
+      if (p.last_read_message_id) {
+        const lr = lastReadMap.get(p.last_read_message_id);
+        if (lr) {
+          where[Op.or] = [
+            { createdAt: { [Op.gt]: lr.createdAt } },
+            { createdAt: lr.createdAt, id: { [Op.gt]: lr.id } },
+          ];
+        }
+      }
+      const n = await Message.count({ where });
+      if (n > 0) unreadConvIds.push(p.conversation_id);
+    }
+
+    if (unreadConvIds.length === 0) return res.json({ conversations: [] });
+
+    // Hydrate the unread conversations with participant info, mirroring the
+    // shape returned by GET /api/conversations so callers can use either.
+    const convs = await Conversation.findAll({ where: { id: unreadConvIds } });
+    const allParts = await ConversationParticipant.findAll({
+      where: { conversation_id: unreadConvIds },
+      attributes: ['conversation_id', 'user_id', 'joined_at'],
+    });
+    const allUserIds = [...new Set(allParts.map(p => p.user_id))];
+    const userRows = await User.findAll({
+      where: { id: allUserIds },
+      attributes: ['id', 'username', 'display_name'],
+    });
+    const userMap = new Map(userRows.map(u => [u.id, u]));
+    const partsByConv = new Map();
+    for (const p of allParts) {
+      if (!partsByConv.has(p.conversation_id)) partsByConv.set(p.conversation_id, []);
+      const u = userMap.get(p.user_id);
+      partsByConv.get(p.conversation_id).push({
+        userId: p.user_id,
+        joinedAt: p.joined_at,
+        username: u?.username || null,
+        displayName: u?.display_name || null,
+      });
+    }
+    const hiddenByConv = new Map(myParts.map(p => [p.conversation_id, p.hidden_at]));
+    const result = convs.map(c =>
+      serializeConversation(c, partsByConv.get(c.id) || [], hiddenByConv.get(c.id))
+    );
+    res.json({ conversations: result });
+  } catch (err) { next(err); }
+});
+
 // GET /api/conversations/:id
 router.get('/:id', requireAuth, requireMember, async (req, res, next) => {
   try {
@@ -312,6 +395,9 @@ router.delete('/:id/participants/me', requireAuth, requireMember, async (req, re
 // if it's a channel, behaves like POST /api/channels/:channelId/read.
 router.post('/:id/read', requireAuth, async (req, res, next) => {
   try {
+    if (!UUID_RE.test(req.params.id)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     const { messageId } = req.body;
     if (!messageId) return res.status(400).json({ error: 'messageId is required' });
 
