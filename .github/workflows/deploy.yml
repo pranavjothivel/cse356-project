@@ -70,6 +70,11 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             ./server/ deploy@$HOST:/srv/app/
 
+          # 2b. Rsync PgBouncer config template
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./infra/pgbouncer/ deploy@$HOST:/srv/app/infra/pgbouncer/
+
           # 3. Install deps and reload PM2 (start on first deploy)
           $SSH deploy@$HOST bash <<'REMOTE'
             set -euo pipefail
@@ -88,6 +93,27 @@ jobs:
                 && echo "pm2: already at $(nproc) instances, skipping scale" \
                 || { echo "$_out" >&2; exit 1; }; }
             pm2 save
+
+            # 4. Configure and reload PgBouncer
+            # Extract host and dbname from PG_DIRECT_URL in .env
+            source /srv/app/.env
+            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+            # Template pgbouncer.ini with actual host/dbname
+            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                /srv/app/infra/pgbouncer/pgbouncer.ini \
+                | sudo tee /etc/pgbouncer/pgbouncer.ini > /dev/null
+
+            # Generate userlist.txt from credentials
+            echo "\"$PG_USER\" \"$PG_PASS\"" | sudo tee /etc/pgbouncer/userlist.txt > /dev/null
+            sudo chmod 640 /etc/pgbouncer/userlist.txt
+            sudo chown pgbouncer:pgbouncer /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+            sudo systemctl reload pgbouncer || sudo systemctl restart pgbouncer
           REMOTE
 
   deploy-frontend:
