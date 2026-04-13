@@ -231,7 +231,7 @@ router.patch('/:messageId', async (req, res, next) => {
     catch (err) {}
 
     msg.content = content;
-    if (attachments !== undefined) msg.attachments = attachments;
+    if (attachments !== undefined && attachments !== null) msg.attachments = attachments;
     msg.edited_at = new Date();
     await msg.save();
 
