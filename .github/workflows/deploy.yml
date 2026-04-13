@@ -71,6 +71,7 @@ jobs:
             ./server/ deploy@$HOST:/srv/app/
 
           # 2b. Rsync PgBouncer config template
+          $SSH deploy@$HOST "mkdir -p /srv/app/infra/pgbouncer"
           rsync -az \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             ./infra/pgbouncer/ deploy@$HOST:/srv/app/infra/pgbouncer/
