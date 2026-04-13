@@ -1,3 +1,4 @@
+require('./instrument');
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
@@ -125,6 +126,9 @@ app.use('/api/users', usersRouter);
 app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });
 });
+
+const Sentry = require('@sentry/node');
+Sentry.setupExpressErrorHandler(app);
 
 app.use((err, req, res, next) => {
   console.error(err);
