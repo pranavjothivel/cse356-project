@@ -127,9 +127,6 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });
 });
 
-// TEMP: Sentry test trigger — remove after verifying event in dashboard
-app.get('/api/debug-sentry', (req, res) => { throw new Error('Sentry test error'); });
-
 const Sentry = require('@sentry/node');
 Sentry.setupExpressErrorHandler(app);
 
