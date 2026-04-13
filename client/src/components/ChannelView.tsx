@@ -114,7 +114,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
   }, [channelId]);
 
   const sendMessage = async () => {
-    if (!draft.trim()) return;
+    if (!draft.trim() && attachments.length === 0) return;
     setError("");
 
     let attachmentsToSend = [];

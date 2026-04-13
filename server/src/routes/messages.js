@@ -120,8 +120,8 @@ router.post('/', async (req, res, next) => {
     if ((channelId && conversationId) || (!channelId && !conversationId)) {
       return res.status(400).json({ error: 'Provide exactly one of channelId or conversationId' });
     }
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
+    if ((!content || (typeof content === 'string' && content.trim().length === 0)) && (!attachments || attachments.length === 0)) {
+      return res.status(400).json({ error: 'content or attachments required' });
     }
     if (attachments && attachments.length > 4) {
       return res.status(400).json({ error: 'Too many attachments. Limit is 4' });
@@ -185,8 +185,8 @@ router.post('/', async (req, res, next) => {
 router.patch('/:messageId', async (req, res, next) => {
   try {
     const { content, attachments } = req.body;
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
+    if ((!content || (typeof content === 'string' && content.trim().length === 0)) && (!attachments || attachments.length === 0)) {
+      return res.status(400).json({ error: 'content or attachments required' });
     }
     if (attachments && attachments.length > 4) {
       return res.status(400).json({ error: 'Too many attachments. Limit is 4' });

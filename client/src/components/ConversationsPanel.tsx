@@ -240,7 +240,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     };
 
     const sendMessage = async () => {
-        if (!selected || !draft.trim()) return;
+        if (!selected || (!draft.trim() && attachments.length === 0)) return;
 
         let attachmentsToSend = [];
         for (let i = 0; i < attachments.length; i++) {
