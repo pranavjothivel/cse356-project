@@ -98,13 +98,15 @@ function AuthContextProvider(props: any) {
                 let body = await res.json();
                 setAuth((prevState: any) => ({
                     ...prevState,
-                    user: { 
-                        id: body.id, 
-                        username: body.username, 
-                        displayName: body.displayName, 
-                        away: body.away, 
+                    user: {
+                        id: body.id,
+                        username: body.username,
+                        displayName: body.displayName,
+                        away: body.away,
                         away_msg: body.away_msg,
-                        avatar: body.avatar
+                        avatar: body.avatar,
+                        providers: body.providers,
+                        hasPassword: body.hasPassword
                     },
                     loggedIn: true
                 }));

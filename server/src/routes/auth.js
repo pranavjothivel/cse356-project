@@ -43,7 +43,7 @@ function oauthSuccessHandler(provider) {
       if (err) return next(err);
 
       if (req.isAuthenticated() && user) {
-        return res.redirect('/auth/settings?linked=' + provider);
+        return res.redirect(process.env.FRONTEND_URL.replace(/\/$/, '') + '/?linked=' + provider);
       }
 
       if (user) {
@@ -125,7 +125,7 @@ router.get('/me', requireAuth, (req, res) => {
     username,
     email,
     displayName: display_name,
-    providers: (providers || []).map(p => ({ provider: p.provider, displayName: p.display_name })),
+    providers: (providers || []).map(p => ({ provider: p.provider, providerId: p.provider_id, displayName: p.display_name })),
     hasPassword: !!req.user.password_hash,
     away,
     away_msg,
