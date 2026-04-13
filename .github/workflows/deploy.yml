@@ -83,7 +83,9 @@ jobs:
             else
               pm2 start ecosystem.config.js
             fi
-            pm2 scale cse356 $(nproc)
+            _out=$(pm2 scale cse356 $(nproc) 2>&1) \
+              || { echo "$_out" | grep -q "Nothing to do" || { echo "$_out" >&2; exit 1; }; }
+            echo "$_out"
             pm2 save
           REMOTE
 
