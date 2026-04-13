@@ -117,7 +117,7 @@ jobs:
 
             echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
             chmod 640 /etc/pgbouncer/userlist.txt
-            chown pgbouncer:pgbouncer /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
 
             systemctl reload pgbouncer || systemctl restart pgbouncer
           PGBOUNCER
