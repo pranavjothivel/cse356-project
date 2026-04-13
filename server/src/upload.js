@@ -1,5 +1,18 @@
 const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
+
+const upload = multer({ 
+  storage: multer.memoryStorage(), 
+  limits: { 
+    fileSize: 5*1024*1024, // 5 MB limit
+    files: 1, // 1 file
+
+    // I don't think the client sends fields, but just in case allow 2
+    fieldSize: 1*1024*1024, 
+    fields: 2,
+
+    parts: 3,
+  } 
+});
 
 const BUCKET = 'images';
 const Minio = require('minio');

@@ -15,6 +15,12 @@ router.post('/', requireAuth, upload.single('image'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No image provided or invalid file type' });
   }
+
+  // In case multer's size check was somehow bypassed
+  if (req.file.size > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Image too large' });
+  }
+  
   const objectName = `${req.user.id}/${crypto.randomUUID()}${path.extname(req.file.originalname)}`;
   const exists = await minioClient.bucketExists(BUCKET);
   if (!exists) {
