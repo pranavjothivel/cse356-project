@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { Op } = require('sequelize');
 const { UniqueConstraintError } = require('sequelize');
+const sequelize = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
 const Message = require('../models/Message');
 const redisClient = require('../redis');
@@ -164,24 +165,30 @@ router.post('/:communityId/join', async (req, res, next) => {
     const community = await Community.findByPk(req.params.communityId);
     if (!community) return res.status(404).json({ error: 'Community not found' });
 
-    const [, created] = await CommunityMember.findOrCreate({
-      where: { community_id: community.id, user_id: req.user.id },
-      defaults: { role: 'member' },
-    });
-    if (!created) return res.status(400).json({ error: 'Already a member' });
+    let alreadyMember = false;
+    await sequelize.transaction(async (t) => {
+      const [, created] = await CommunityMember.findOrCreate({
+        where: { community_id: community.id, user_id: req.user.id },
+        defaults: { role: 'member' },
+        transaction: t,
+      });
+      if (!created) { alreadyMember = true; return; }
 
-    // Auto-join all public channels
-    const publicChannels = await Channel.findAll({
-      where: { community_id: community.id, is_private: false },
-      attributes: ['id'],
+      // Auto-join all public channels (atomic with community membership)
+      const publicChannels = await Channel.findAll({
+        where: { community_id: community.id, is_private: false },
+        attributes: ['id'],
+        transaction: t,
+      });
+      if (publicChannels.length > 0) {
+        await ChannelMember.bulkCreate(
+          publicChannels.map(c => ({ channel_id: c.id, user_id: req.user.id })),
+          { ignoreDuplicates: true, transaction: t }
+        );
+      }
     });
-    if (publicChannels.length > 0) {
-      await ChannelMember.bulkCreate(
-        publicChannels.map(c => ({ channel_id: c.id, user_id: req.user.id })),
-        { ignoreDuplicates: true }
-      );
-    }
 
+    if (alreadyMember) return res.status(400).json({ error: 'Already a member' });
     res.json({ message: 'Joined community' });
   } catch (err) { next(err); }
 });
