@@ -2,7 +2,13 @@ import { useState, useEffect, useContext } from "react";
 
 import AuthContext from "../auth";
 
-export default function ProfileModal({ closeCallback } : any) {
+const ALL_PROVIDERS = [
+    { key: 'google', label: 'Google', path: '/auth/google' },
+    { key: 'github', label: 'GitHub', path: '/auth/github' },
+    { key: 'oidc', label: 'Course Provider', path: '/auth/oidc' },
+];
+
+export default function ProfileModal({ closeCallback, linkedMsg } : any) {
     const { auth } = useContext(AuthContext);
 
     const [newDN, setNewDN] = useState<string>("");
@@ -14,6 +20,7 @@ export default function ProfileModal({ closeCallback } : any) {
     const [pwDisplay, setPWDisplay] = useState<string>("");
 
     const [err, setErr] = useState("");
+    const [oauthErr, setOauthErr] = useState("");
 
     useEffect(() => {
         setAvatarSrc(import.meta.env.VITE_IMAGE_URL + "/" + auth.user.avatar);
@@ -97,6 +104,22 @@ export default function ProfileModal({ closeCallback } : any) {
     const handleNewPWInput = (event: any) => {
         setNewPassword(event.target.value);
     }
+    const handleUnlink = async (provider: string, providerId: string) => {
+        const res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/unlink", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider, providerId })
+        });
+        if (res.ok) {
+            setOauthErr("");
+            await auth.getLoggedIn();
+        } else {
+            const data = await res.json();
+            setOauthErr(data.error || "Failed to unlink");
+        }
+    };
+
     const handleChangePW = async () => {
         let res = await fetch(import.meta.env.VITE_BACKEND_URL + "/auth/settings/set-password", {
                     method: "POST",
@@ -121,6 +144,7 @@ export default function ProfileModal({ closeCallback } : any) {
     return (
         <div className="modal-container">
             <div className="modal">
+                {linkedMsg && <div style={{color: "#43b581", marginBottom: "8px"}}>{linkedMsg}</div>}
                 <div style={{marginTop: "8px"}}>Id: {auth.user.id}</div>
                 <div style={{marginTop: "8px"}}>Username: {auth.user.username}</div>
                 <div style={{display: "flex", marginTop: "8px"}}>
@@ -160,6 +184,26 @@ export default function ProfileModal({ closeCallback } : any) {
                         <input type="file" accept="image/*" onChange={handleChangeAvatar}/>
                         {pendingAvatarFile && <button onClick={handleSaveAvatar}>Save Avatar</button>}
                     </div>
+                </div>
+                <div style={{marginTop: "16px"}}>
+                    <div>Linked OAuth Providers</div>
+                    {ALL_PROVIDERS.map(p => {
+                        const linked = (auth.user.providers || []).find((lp: any) => lp.provider === p.key);
+                        return (
+                            <div key={p.key} style={{display: "flex", alignItems: "center", gap: "8px", marginTop: "6px"}}>
+                                <span style={{minWidth: "120px"}}>{p.label}</span>
+                                {linked ? (
+                                    <>
+                                        <span style={{color: "#aaa", fontSize: "0.85em"}}>{linked.displayName}</span>
+                                        <button onClick={() => handleUnlink(p.key, linked.providerId)}>Unlink</button>
+                                    </>
+                                ) : (
+                                    <a href={import.meta.env.VITE_BACKEND_URL + p.path}>Link</a>
+                                )}
+                            </div>
+                        );
+                    })}
+                    {oauthErr && <div style={{color: "red", marginTop: "4px"}}>{oauthErr}</div>}
                 </div>
                 <button style={{marginTop: "16px"}} onClick={handleClose}>Close</button>
             </div>

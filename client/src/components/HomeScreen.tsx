@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useIdle } from "@uidotdev/usehooks";
 
@@ -14,9 +14,11 @@ import ConversationsPanel from "./ConversationsPanel";
 export default function HomeScreen() {
     const { auth } = useContext(AuthContext);
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const idle = useIdle(60000);
 
     const [modal, setModal] = useState<string>("");
+    const [oauthLinkedMsg, setOauthLinkedMsg] = useState<string>("");
     const [selectedCommunityId, setSelectedCommunityId] = useState<string | null>(null);
     const [view, setView] = useState<"home" | "dms">("home");
     const [unreadConvIds, setUnreadConvIds] = useState<Set<string>>(new Set());
@@ -107,6 +109,17 @@ export default function HomeScreen() {
         }
     }, [auth.user?.away]);
 
+    useEffect(() => {
+        const linked = searchParams.get('linked');
+        if (linked && auth.loggedIn) {
+            auth.getLoggedIn().then(() => {
+                setOauthLinkedMsg(linked + ' linked successfully');
+                setModal('profile');
+                navigate('/', { replace: true });
+            });
+        }
+    }, [auth.loggedIn]);
+
     const sendMsg = (msg: any) => {
         if (ws.current) {
             ws.current!.send(JSON.stringify(msg));
@@ -124,7 +137,7 @@ export default function HomeScreen() {
 
     let modalContent: any = "";
     if (modal == "profile") {
-        modalContent = <ProfileModal sendCallback={sendMsg} closeCallback={() => {changeModal("")}}/>;
+        modalContent = <ProfileModal sendCallback={sendMsg} closeCallback={() => { changeModal(""); setOauthLinkedMsg(""); }} linkedMsg={oauthLinkedMsg}/>;
     }
 
     return (
