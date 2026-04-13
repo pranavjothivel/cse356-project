@@ -1,16 +1,16 @@
 # Scaling Analysis
 
-## Current State (as of 2026-04-08)
+## Current State (as of 2026-04-12)
 
-### Hardware (all nodes are Clanode 2G)
+### Hardware
 
-| Node | Role | CPU | RAM |
-|---|---|---|---|
-| `group1-api-node-01` | App (PM2 / Node.js) | 1 core | 2 GB |
-| `group1-api-node-02` | App (PM2 / Node.js) | 1 core | 2 GB |
-| `group1-db-psql-01` | PostgreSQL | 1 core | 2 GB |
-| `group1-db-redis-01` | Redis | 1 core | 2 GB |
-| `group1-web-lb01` | HAProxy + Nginx | 1 core | 2 GB |
+| Node | Role | Public IP | CPU | RAM |
+|---|---|---|---|---|
+| `group1-api-node-01` | App (PM2 / Node.js) | `130.245.136.217` | 1 core | 4 GB |
+| `group1-api-node-02` | App (PM2 / Node.js) | `130.245.136.149` | 1 core | 4 GB |
+| `group1-db-psql-01` | PostgreSQL | `130.245.136.224` | 1 core | 2 GB |
+| `group1-db-redis-01` | Redis | `130.245.136.86` | 1 core | 2 GB |
+| `group1-web-lb01` | HAProxy + Nginx | `130.245.136.254` | 1 core | 2 GB |
 
 ### Bottleneck Stack
 
