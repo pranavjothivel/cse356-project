@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
+const ConversationParticipant = require('./models/ConversationParticipant');
 const redisClient = require('./redis');
 
 // Identifier that should be sent when publishing through Redis
@@ -238,6 +239,49 @@ async function getCoCommunityUserIds(userId) {
   return [...new Set(coMembers.map(r => r.user_id))];
 }
 
+/**
+ * Get all user IDs who should see this user's presence changes:
+ * co-community members + conversation (DM/group) partners.
+ */
+async function getPresenceAudienceUserIds(userId) {
+  const [communityUserIds, convParts] = await Promise.all([
+    getCoCommunityUserIds(userId),
+    ConversationParticipant.findAll({
+      attributes: ['conversation_id'],
+      where: { user_id: userId },
+      raw: true,
+    }),
+  ]);
+
+  let convUserIds = [];
+  if (convParts.length > 0) {
+    const convIds = convParts.map(p => p.conversation_id);
+    const coParticipants = await ConversationParticipant.findAll({
+      attributes: ['user_id'],
+      where: { conversation_id: convIds, user_id: { [Op.ne]: userId } },
+      raw: true,
+    });
+    convUserIds = coParticipants.map(p => p.user_id);
+  }
+
+  return [...new Set([...communityUserIds, ...convUserIds])];
+}
+
+/**
+ * Broadcast a presence.changed event to all users who share a community or
+ * conversation with the subject user. Replaces the old broadcastToAllConnected
+ * approach which sent presence to every connected user in the cluster.
+ */
+async function broadcastPresenceChange(userId, presence) {
+  const audienceIds = await getPresenceAudienceUserIds(userId);
+  if (audienceIds.length === 0) return;
+  broadcastToUsers(audienceIds, {
+    type: 'presence.changed',
+    userId,
+    presence,
+  });
+}
+
 const configureWSServer = (wss) => {
   wss.on('connection', async (ws, req) => {
     let connId = crypto.randomUUID();
@@ -326,13 +370,9 @@ const configureWSServer = (wss) => {
               }));
             }
 
-            // Broadcast to all connected users whenever final presence actually changed
+            // Broadcast to relevant users whenever final presence actually changed
             if (finalPresence !== prevFinalPresence) {
-              broadcastToAllConnected({
-                type: 'presence.changed',
-                userId: id,
-                presence: finalPresence,
-              }, { excludeUserId: id });
+              broadcastPresenceChange(id, finalPresence);
             }
           });
         }
@@ -366,11 +406,7 @@ const configureWSServer = (wss) => {
           if (connIds.length <= 1 && redisUser.conns[connId]) {
             await redisClient.del(`users:${id}`);
             users.delete(id);
-            broadcastToAllConnected({
-              type: 'presence.changed',
-              userId: id,
-              presence: 'offline',
-            }, { excludeUserId: id });
+            broadcastPresenceChange(id, 'offline');
           }
           else {
             delete redisUser.conns[connId];
@@ -390,11 +426,7 @@ const configureWSServer = (wss) => {
             await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
             if (finalPresence !== prevFinalPresence) {
-              broadcastToAllConnected({
-                type: 'presence.changed',
-                userId: id,
-                presence: finalPresence,
-              }, { excludeUserId: id });
+              broadcastPresenceChange(id, finalPresence);
             }
           }
 
@@ -495,11 +527,7 @@ const configureWSServer = (wss) => {
       // through this branch. Self-excluded: this user's own tabs either
       // already know (multi-tab) or get the "unaway" frame above.
       if (wasFirstConn) {
-        broadcastToAllConnected({
-          type: 'presence.changed',
-          userId: id,
-          presence: 'online',
-        }, { excludeUserId: id });
+        broadcastPresenceChange(id, 'online');
       }
 
       console.log('Client connected');
@@ -515,7 +543,7 @@ const configureWSServer = (wss) => {
 module.exports = {
   configureWSServer,
   broadcastToUsers,
-  broadcastToAllConnected,
+  broadcastPresenceChange,
   notifyUserAwayFrame,
   getCoCommunityUserIds,
   initWS,
