@@ -25,6 +25,7 @@ interface Props {
   channelPrivate: boolean;
   communityId: string;
   userRole: string;
+  onRefresh: () => void;
 }
 
 function authorLabel(msg: ChannelMessage): string {
@@ -34,7 +35,7 @@ function authorLabel(msg: ChannelMessage): string {
   return msg.authorId.slice(0, 8);
 }
 
-export default function ChannelView({ channelId, channelName, channelPrivate, userRole }: Props) {
+export default function ChannelView({ channelId, channelName, channelPrivate, userRole, onRefresh }: Props) {
   const { auth } = useContext(AuthContext);
   const myId: string | undefined = auth.user?.id;
 
@@ -259,11 +260,30 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
     }
   }
 
+  const changePrivate = async (priv: boolean) => {
+    const res = await apiPatch(`/channels/${channelId}`, { is_private: priv });
+    if (res.ok) {
+      onRefresh();
+    }
+    else {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || "Failed to change public/private status");
+    }
+  }
+
   return (
     <div className="channel-view" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="channel-view-header" style={{ padding: "8px 12px", borderBottom: "1px solid #333", flexShrink: 0 }}>
+      <div className="channel-view-header" style={{ display: "flex", padding: "8px 12px", borderBottom: "1px solid #333", flexShrink: 0 }}>
         <span style={{ fontWeight: 600 }}>#{channelName}</span>
-        {channelPrivate && (userRole === "owner" || userRole === "admin") ? <button className="btn-small" style={{marginLeft: "8px"}} onClick={invite}>Invite</button> : ''}
+        {channelPrivate && (userRole === "owner" || userRole === "admin") ? 
+          <div>
+            <button className="btn-small" style={{marginLeft: "8px"}} onClick={invite}>Invite</button> 
+            <button className="btn-small" style={{marginLeft: "8px"}} onClick={() => {changePrivate(false)}}>Set Public</button> 
+          </div>
+          : ''}
+        {!channelPrivate && (userRole === "owner" || userRole === "admin") ?
+          <button className="btn-small" style={{marginLeft: "8px"}} onClick={() => {changePrivate(true)}}>Set Private</button> 
+          : ''}
       </div>
 
       {/* Message list */}
