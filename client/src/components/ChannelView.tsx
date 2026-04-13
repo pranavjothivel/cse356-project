@@ -22,7 +22,9 @@ interface ChannelMessage {
 interface Props {
   channelId: string;
   channelName: string;
+  channelPrivate: boolean;
   communityId: string;
+  userRole: string;
 }
 
 function authorLabel(msg: ChannelMessage): string {
@@ -32,7 +34,7 @@ function authorLabel(msg: ChannelMessage): string {
   return msg.authorId.slice(0, 8);
 }
 
-export default function ChannelView({ channelId, channelName }: Props) {
+export default function ChannelView({ channelId, channelName, channelPrivate, userRole }: Props) {
   const { auth } = useContext(AuthContext);
   const myId: string | undefined = auth.user?.id;
 
@@ -247,10 +249,21 @@ export default function ChannelView({ channelId, channelName }: Props) {
     setEditAttachments(newAttachments);
   }
 
+  const invite = async () => {
+    const username = window.prompt("Username to invite:");
+    if (!username) return;
+    const res = await apiPost(`/channels/${channelId}/invite`, { username: username.trim() });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || "Failed to invite user");
+    }
+  }
+
   return (
     <div className="channel-view" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="channel-view-header" style={{ padding: "8px 12px", borderBottom: "1px solid #333", flexShrink: 0 }}>
         <span style={{ fontWeight: 600 }}>#{channelName}</span>
+        {channelPrivate && (userRole === "owner" || userRole === "admin") ? <button className="btn-small" style={{marginLeft: "8px"}} onClick={invite}>Invite</button> : ''}
       </div>
 
       {/* Message list */}
@@ -276,7 +289,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
                     style={{ flex: 1, background: "#222", color: "white", border: "1px solid #555", padding: "2px 6px" }}
                     autoFocus
                   />
-                  <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                  <input type="file" accept="image/*" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
                   <button className="btn-small" onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                   <button className="btn-small" onClick={saveEdit}>save</button>
                   <button className="btn-small" style={{ background: "#444" }} onClick={() => setEditingId(null)}>cancel</button>
@@ -360,7 +373,7 @@ export default function ChannelView({ channelId, channelName }: Props) {
           placeholder={`Message #${channelName}`}
           style={{ flex: 1 }}
         />
-        <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+        <input type="file" accept="image/*" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
         <button className="btn-small" onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
         <button className="btn-small" onClick={sendMessage}>Send</button>
       </div>

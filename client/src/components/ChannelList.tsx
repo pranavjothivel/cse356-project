@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { apiPost } from "../api";
 import CreateChannelModal from "./CreateChannelModal";
 
 interface ChannelInfo {
@@ -23,11 +22,6 @@ export default function ChannelList({ communityId, channels, userRole, selectedI
   const [showCreate, setShowCreate] = useState(false);
   const isAdmin = userRole === "owner" || userRole === "admin";
 
-  const handleJoin = async (channelId: string) => {
-    const res = await apiPost(`/channels/${channelId}/join`);
-    if (res.ok) onRefresh();
-  };
-
   return (
     <div className="channel-panel">
       <div className="channel-panel-header">
@@ -48,9 +42,6 @@ export default function ChannelList({ communityId, channels, userRole, selectedI
             <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, color: "#5865f2", textTransform: "uppercase", letterSpacing: 0.3 }}>
               Unread
             </span>
-          )}
-          {!c.is_joined && (
-            <button className="join-btn" onClick={(e) => { e.stopPropagation(); handleJoin(c.id); }}>Join</button>
           )}
         </div>
       ))}

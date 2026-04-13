@@ -82,25 +82,37 @@ router.delete('/:channelId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /:channelId/join — Join channel
-router.post('/:channelId/join', async (req, res, next) => {
+// POST /:channelId/invite/ — Join channel
+router.post('/:channelId/invite', async (req, res, next) => {
   try {
-    const channel = await Channel.findByPk(req.params.channelId);
-    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    let { userId, username } = req.body;
+    if (!userId && !username) return res.status(400).json({ error: 'userId or username is required' });
+
+    const result = await loadChannelAndCheckAdmin(req, res);
+    if (!result) return;
+    const { channel } = result;
+
+    const target = userId
+        ? await User.findByPk(userId)
+        : await User.findOne({ where: { username } });
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    // Set id in case only username was given
+    userId = target.id;
 
     // Must be a community member
     const communityMember = await CommunityMember.findOne({
-      where: { community_id: channel.community_id, user_id: req.user.id },
+      where: { community_id: channel.community_id, user_id: userId },
     });
-    if (!communityMember) return res.status(403).json({ error: 'Must be a community member' });
+    if (!communityMember) return res.status(403).json({ error: 'User must be a community member' });
 
     const existing = await ChannelMember.findOne({
-      where: { channel_id: channel.id, user_id: req.user.id },
+      where: { channel_id: channel.id, user_id: userId },
     });
     if (existing) return res.status(400).json({ error: 'Already a channel member' });
 
-    await ChannelMember.create({ channel_id: channel.id, user_id: req.user.id });
-    res.json({ message: 'Joined channel' });
+    await ChannelMember.create({ channel_id: channel.id, user_id: userId });
+    res.json({ message: 'User now has access to this channel' });
   } catch (err) { next(err); }
 });
 
