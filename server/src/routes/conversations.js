@@ -1,7 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { Op } = require('sequelize');
-
 const sequelize = require('../db');
 const Conversation = require('../models/Conversation');
 const ConversationParticipant = require('../models/ConversationParticipant');
@@ -231,31 +229,29 @@ router.get('/unread', requireAuth, async (req, res, next) => {
     });
     if (myParts.length === 0) return res.json({ conversations: [] });
 
-    // Resolve each participant's last-read message's createdAt (parallel).
-    const lastReadIds = myParts.map(p => p.last_read_message_id).filter(Boolean);
-    const lastReadRows = lastReadIds.length > 0
-      ? await Message.findAll({ where: { id: lastReadIds }, attributes: ['id', 'createdAt'] })
-      : [];
-    const lastReadMap = new Map(lastReadRows.map(m => [m.id, m]));
-
-    // Check each conversation for a message strictly newer than last-read.
-    // Uses the same tie-break (createdAt, id) as the channels unread check in
-    // communities.js so the two are consistent.
-    const unreadConvIds = [];
-    for (const p of myParts) {
-      const where = { conversation_id: p.conversation_id };
-      if (p.last_read_message_id) {
-        const lr = lastReadMap.get(p.last_read_message_id);
-        if (lr) {
-          where[Op.or] = [
-            { createdAt: { [Op.gt]: lr.createdAt } },
-            { createdAt: lr.createdAt, id: { [Op.gt]: lr.id } },
-          ];
-        }
-      }
-      const n = await Message.count({ where });
-      if (n > 0) unreadConvIds.push(p.conversation_id);
-    }
+    // Check all conversations for unread messages in a single query.
+    // Uses LEFT JOIN so deleted last-read messages (lr.id IS NULL) are
+    // treated as "never read", consistent with the channels unread check.
+    const convIds = myParts.map(p => p.conversation_id);
+    const unreadRows = await sequelize.query(`
+      SELECT cp.conversation_id
+      FROM conversation_participants cp
+      LEFT JOIN messages lr ON lr.id = cp.last_read_message_id
+      WHERE cp.conversation_id IN (:convIds)
+        AND cp.user_id = :userId
+        AND EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = cp.conversation_id
+            AND (
+              lr.id IS NULL
+              OR (m.created_at, m.id) > (lr.created_at, lr.id)
+            )
+        )
+    `, {
+      replacements: { convIds, userId: req.user.id },
+      type: sequelize.QueryTypes.SELECT,
+    });
+    const unreadConvIds = unreadRows.map(r => r.conversation_id);
 
     if (unreadConvIds.length === 0) return res.json({ conversations: [] });
 
