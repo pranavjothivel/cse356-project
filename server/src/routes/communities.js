@@ -1,9 +1,7 @@
 const { Router } = require('express');
-const { Op } = require('sequelize');
-const { UniqueConstraintError } = require('sequelize');
+const { Op, UniqueConstraintError } = require('sequelize');
 const sequelize = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
-const Message = require('../models/Message');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');
 
@@ -125,21 +123,33 @@ router.get('/:communityId', async (req, res, next) => {
       : [];
     const joinedMap = new Map(joinedChannels.map(cm => [cm.channel_id, cm.last_read_message_id]));
 
-    // For each joined channel, check if there are messages newer than last_read
+    // Check all joined channels for unread messages in a single query.
+    // Uses LEFT JOIN to resolve last_read_message_id so that deleted
+    // last-read messages (lr.id IS NULL) are treated as "never read".
     const unreadSet = new Set();
-    for (const [channelId, lastReadId] of joinedMap.entries()) {
-      const where = { channel_id: channelId };
-      if (lastReadId) {
-        const lastRead = await Message.findByPk(lastReadId, { attributes: ['createdAt', 'id'] });
-        if (lastRead) {
-          where[Op.or] = [
-            { createdAt: { [Op.gt]: lastRead.createdAt } },
-            { createdAt: lastRead.createdAt, id: { [Op.gt]: lastRead.id } },
-          ];
-        }
-      }
-      const count = await Message.count({ where });
-      if (count > 0) unreadSet.add(channelId);
+    if (joinedChannels.length > 0) {
+      const unreadRows = await sequelize.query(`
+        SELECT cm.channel_id
+        FROM channel_members cm
+        LEFT JOIN messages lr ON lr.id = cm.last_read_message_id
+        WHERE cm.channel_id IN (:channelIds)
+          AND cm.user_id = :userId
+          AND EXISTS (
+            SELECT 1 FROM messages m
+            WHERE m.channel_id = cm.channel_id
+              AND (
+                lr.id IS NULL
+                OR (m.created_at, m.id) > (lr.created_at, lr.id)
+              )
+          )
+      `, {
+        replacements: {
+          channelIds: [...joinedMap.keys()],
+          userId: req.user.id,
+        },
+        type: sequelize.QueryTypes.SELECT,
+      });
+      for (const row of unreadRows) unreadSet.add(row.channel_id);
     }
 
     const channels = community.channels.map(c => ({
