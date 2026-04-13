@@ -509,7 +509,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                                 ? (
                                                     <span>
                                                         <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
-                                                        <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                                                        <input type="file" accept="image/*" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
                                                         <button onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                                                         <button onClick={saveEdit}>save</button>
                                                         <button onClick={() => setEditingId(null)}>cancel</button>
@@ -586,7 +586,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                     padding: "4px 6px",
                                 }}
                             />
-                            <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+                            <input type="file" accept="image/*" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
                             <button onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
                             <button onClick={sendMessage}>send</button>
                         </div>
