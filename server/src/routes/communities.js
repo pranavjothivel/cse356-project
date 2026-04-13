@@ -25,13 +25,16 @@ router.post('/', async (req, res, next) => {
     if (ownedCount >= 100) return res.status(403).json({ error: 'Cannot create more than 100 communities' });
 
     const existing = await Community.findOne({ where: { name: name.trim() } });
-    if (existing) return res.status(409).json({ error: 'A community with this name already exists' });
+    if (existing) return res.status(409).json({ error: 'A community with this name already exists', community: { id: existing.id, name: existing.name } });
 
     let community;
     try {
       community = await Community.create({ name: name.trim(), owner_id: req.user.id });
     } catch (err) {
-      if (err instanceof UniqueConstraintError) return res.status(409).json({ error: 'A community with this name already exists' });
+      if (err instanceof UniqueConstraintError) {
+        const dup = await Community.findOne({ where: { name: name.trim() } });
+        return res.status(409).json({ error: 'A community with this name already exists', community: dup ? { id: dup.id, name: dup.name } : null });
+      }
       throw err;
     }
     await CommunityMember.create({ community_id: community.id, user_id: req.user.id, role: 'owner' });
