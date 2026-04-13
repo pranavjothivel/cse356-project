@@ -84,7 +84,9 @@ jobs:
               pm2 start ecosystem.config.js
             fi
             _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
-              || { echo "$_out" | grep -q "Nothing to do" || { echo "$_out" >&2; exit 1; }; }
+              || { echo "$_out" | grep -q "Nothing to do" \
+                && echo "pm2: already at $(nproc) instances, skipping scale" \
+                || { echo "$_out" >&2; exit 1; }; }
             pm2 save
           REMOTE
 
