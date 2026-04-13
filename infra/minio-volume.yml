@@ -1,0 +1,7 @@
+device: /dev/vdb
+mount: /mnt/minio-bucket
+fs: ext4
+# size_gb is the source of truth — update this before merging a resize
+size_gb: 100
+host: 130.245.136.254   # LB node where MinIO runs
+minio_data_dir: /mnt/minio-bucket
