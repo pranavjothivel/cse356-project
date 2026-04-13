@@ -10,7 +10,7 @@ Message.init({
   conversation_id: { type: DataTypes.UUID, allowNull: true },
   channel_id: { type: DataTypes.UUID, allowNull: true },
   author_id: { type: DataTypes.UUID, allowNull: false },
-  content: { type: DataTypes.TEXT, allowNull: false },
+  content: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
   edited_at: { type: DataTypes.DATE, allowNull: true },
   // Up to 4 image URLs (uploaded via POST /api/upload)
   attachments: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false, defaultValue: [] },
