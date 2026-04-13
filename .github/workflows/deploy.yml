@@ -90,6 +90,38 @@ jobs:
             pm2 save
           REMOTE
 
+      - name: Configure PgBouncer
+        env:
+          HOST: ${{ matrix.node.ip }}
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+        run: |
+          # Rsync PgBouncer config template
+          $SSH deploy@$HOST "mkdir -p /srv/app/infra/pgbouncer"
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./infra/pgbouncer/ deploy@$HOST:/srv/app/infra/pgbouncer/
+
+          # Template config and reload (requires root)
+          $SSH root@$HOST bash <<'PGBOUNCER'
+            set -euo pipefail
+            source /srv/app/.env
+            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                /srv/app/infra/pgbouncer/pgbouncer.ini \
+                > /etc/pgbouncer/pgbouncer.ini
+
+            echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
+            chmod 640 /etc/pgbouncer/userlist.txt
+            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+            systemctl reload pgbouncer || systemctl restart pgbouncer
+          PGBOUNCER
+
   deploy-frontend:
     name: Deploy frontend to LB
     needs: [setup, deploy-app]
