@@ -5,5 +5,9 @@ app_nodes:
   - name: group1-api-node-02
     ip: 130.245.136.149
     private_ip: 10.0.1.121
+  - name: group1-api-node-03
+    ip: 130.245.136.239
+    private_ip: 10.0.0.177
+    type: 1vcpu-2gb
 
 lb_node: 130.245.136.254
