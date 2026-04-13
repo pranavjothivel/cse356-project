@@ -7,7 +7,7 @@ const path = require('path');
 
 const User = require('../models/User');
 const { minioClient, BUCKET } = require('../upload');
-const { broadcastToAllConnected, withUserPresenceLock, notifyUserAwayFrame } = require('../ws');
+const { broadcastPresenceChange, withUserPresenceLock, notifyUserAwayFrame } = require('../ws');
 const redisClient = require('../redis');
 
 // ──────────────────────────────────────────────
@@ -335,11 +335,7 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
         // Broadcast presence.changed to every other connected user. `finalPresence`
         // reflects the recomputed state (so unaway correctly reports 'idle' when
         // every remaining conn was idle before the away toggle).
-        broadcastToAllConnected({
-          type: 'presence.changed',
-          userId,
-          presence: finalPresence,
-        }, { excludeUserId: userId });
+        broadcastPresenceChange(userId, finalPresence);
       });
     }
 
