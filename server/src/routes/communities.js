@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { UniqueConstraintError } = require('sequelize');
 const sequelize = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
+const Message = require('../models/Message');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');
 
@@ -124,42 +125,21 @@ router.get('/:communityId', async (req, res, next) => {
       : [];
     const joinedMap = new Map(joinedChannels.map(cm => [cm.channel_id, cm.last_read_message_id]));
 
-    // Check all joined channels for unread messages in a single query.
-    // For each channel, a message is "unread" if it is strictly newer than the
-    // last_read_message (using the (created_at, id) tie-break) or if
-    // last_read_message_id is NULL (meaning the user has never read the channel
-    // but messages exist).
+    // For each joined channel, check if there are messages newer than last_read
     const unreadSet = new Set();
-    if (joinedChannels.length > 0) {
-      const unreadRows = await sequelize.query(`
-        SELECT cm.channel_id
-        FROM channel_members cm
-        WHERE cm.channel_id = ANY(:channelIds)
-          AND cm.user_id = :userId
-          AND EXISTS (
-            SELECT 1 FROM messages m
-            WHERE m.channel_id = cm.channel_id
-              AND (
-                cm.last_read_message_id IS NULL
-                OR (m.created_at, m.id) > (
-                  SELECT lr.created_at, lr.id
-                  FROM messages lr
-                  WHERE lr.id = cm.last_read_message_id
-                )
-              )
-              AND (
-                cm.last_read_message_id IS NULL
-                OR m.id != cm.last_read_message_id
-              )
-          )
-      `, {
-        replacements: {
-          channelIds: [...joinedMap.keys()],
-          userId: req.user.id,
-        },
-        type: sequelize.QueryTypes.SELECT,
-      });
-      for (const row of unreadRows) unreadSet.add(row.channel_id);
+    for (const [channelId, lastReadId] of joinedMap.entries()) {
+      const where = { channel_id: channelId };
+      if (lastReadId) {
+        const lastRead = await Message.findByPk(lastReadId, { attributes: ['createdAt', 'id'] });
+        if (lastRead) {
+          where[Op.or] = [
+            { createdAt: { [Op.gt]: lastRead.createdAt } },
+            { createdAt: lastRead.createdAt, id: { [Op.gt]: lastRead.id } },
+          ];
+        }
+      }
+      const count = await Message.count({ where });
+      if (count > 0) unreadSet.add(channelId);
     }
 
     const channels = community.channels.map(c => ({
