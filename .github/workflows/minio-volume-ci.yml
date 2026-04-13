@@ -1,0 +1,93 @@
+name: MinIO Volume Config Check
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - infra/minio-volume.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - infra/minio-volume.yml
+
+jobs:
+  validate:
+    name: Validate minio-volume.yml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Read new config size
+        id: new
+        run: |
+          echo "size_gb=$(yq '.size_gb' infra/minio-volume.yml)" >> "$GITHUB_OUTPUT"
+
+      - name: Read previous config size (base branch)
+        id: old
+        run: |
+          git fetch origin main
+          BASE=$(git merge-base HEAD origin/main)
+          OLD=$(git show "$BASE:infra/minio-volume.yml" 2>/dev/null \
+            | yq '.size_gb' 2>/dev/null || echo "0")
+          echo "size_gb=$OLD" >> "$GITHUB_OUTPUT"
+
+      - name: Check size is not a reduction
+        env:
+          OLD_GB: ${{ steps.old.outputs.size_gb }}
+          NEW_GB: ${{ steps.new.outputs.size_gb }}
+        run: |
+          echo "Previous size: ${OLD_GB}G  →  New size: ${NEW_GB}G"
+
+          if [ "$NEW_GB" -lt "$OLD_GB" ]; then
+            cat <<'WARNING'
+
+          ╔══════════════════════════════════════════════════════════════════╗
+          ║  ⚠️  VOLUME SIZE REDUCTION DETECTED — THIS WILL FAIL IN PROD   ║
+          ╚══════════════════════════════════════════════════════════════════╝
+
+          You are trying to set size_gb from ${OLD_GB}G → ${NEW_GB}G.
+          Linode Block Storage does NOT support shrinking volumes.
+          resize2fs cannot shrink a live or recently-written ext4 filesystem
+          without data loss risk.
+
+          REMEDIAL STEPS:
+          ─────────────────────────────────────────────────────────────────
+          1. Revert size_gb in infra/minio-volume.yml back to ${OLD_GB} (or higher).
+
+          2. If you genuinely need less space, the safe procedure is:
+             a. Provision a NEW smaller Linode volume.
+             b. Stop MinIO:  systemctl stop minio
+             c. rsync data to the new volume:
+                rsync -av /mnt/minio-bucket/ /mnt/new-volume/
+             d. Update minio-volume.yml with the new device/mount/size.
+             e. Update /etc/systemd/system/minio.service ExecStart path.
+             f. Update /etc/fstab — remove old entry, add new one.
+             g. Start MinIO:  systemctl start minio
+             h. Detach and delete the old volume from Linode Cloud Manager.
+
+          3. To check current disk usage before deciding:
+             SSH into 130.245.136.254 and run:
+               df -h /mnt/minio-bucket
+
+          ─────────────────────────────────────────────────────────────────
+          WARNING
+            # Interpolate the shell vars that cat <<'WARNING' blocked
+            echo "  Previous: ${OLD_GB}G → Requested: ${NEW_GB}G"
+            exit 1
+          fi
+
+          if [ "$NEW_GB" -eq "$OLD_GB" ]; then
+            echo "Size unchanged (${NEW_GB}G). No resize will be triggered on deploy."
+          else
+            echo "✓ Size increase ${OLD_GB}G → ${NEW_GB}G is valid."
+            echo "  Remember: resize the Linode volume in Cloud Manager BEFORE merging,"
+            echo "  or the deploy job will fail when resize2fs runs."
+          fi

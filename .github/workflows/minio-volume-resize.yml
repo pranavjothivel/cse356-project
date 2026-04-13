@@ -1,0 +1,79 @@
+name: MinIO Volume Resize
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/minio-volume.yml
+
+jobs:
+  resize:
+    name: Resize MinIO volume on LB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Read volume config
+        id: cfg
+        run: |
+          echo "device=$(yq '.device' infra/minio-volume.yml)"   >> "$GITHUB_OUTPUT"
+          echo "mount=$(yq '.mount'  infra/minio-volume.yml)"    >> "$GITHUB_OUTPUT"
+          echo "size_gb=$(yq '.size_gb' infra/minio-volume.yml)" >> "$GITHUB_OUTPUT"
+          echo "host=$(yq '.host' infra/minio-volume.yml)"       >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Resize filesystem on LB
+        env:
+          HOST: ${{ steps.cfg.outputs.host }}
+          DEVICE: ${{ steps.cfg.outputs.device }}
+          MOUNT: ${{ steps.cfg.outputs.mount }}
+          SIZE_GB: ${{ steps.cfg.outputs.size_gb }}
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+        run: |
+          $SSH root@$HOST bash <<REMOTE
+            set -euo pipefail
+
+            DEVICE="$DEVICE"
+            MOUNT="$MOUNT"
+
+            # Current size (GiB) reported by the kernel
+            CURRENT_GB=\$(lsblk -b -n -o SIZE "\$DEVICE" | awk '{printf "%d", \$1/1024/1024/1024}')
+            echo "Kernel sees \${CURRENT_GB}G on \$DEVICE, config target: ${SIZE_GB}G"
+
+            if [ "\$CURRENT_GB" -le 1 ]; then
+              echo "ERROR: lsblk returned an unexpected size (\${CURRENT_GB}G). Has Linode finished resizing the volume?" >&2
+              exit 1
+            fi
+
+            # Unmount, fsck, resize2fs, remount
+            echo "Unmounting \$MOUNT..."
+            umount "\$DEVICE" || { echo "umount failed — is MinIO still writing?" >&2; exit 1; }
+
+            echo "Running e2fsck..."
+            e2fsck -f "\$DEVICE"
+
+            echo "Resizing filesystem..."
+            resize2fs "\$DEVICE"
+
+            echo "Remounting..."
+            mount "\$DEVICE" "\$MOUNT"
+
+            # Restart MinIO so it picks up any internal state refresh
+            systemctl restart minio
+            sleep 3
+            systemctl is-active --quiet minio && echo "MinIO running" || { echo "MinIO failed to start" >&2; exit 1; }
+
+            # Report new size
+            df -h "\$MOUNT"
+          REMOTE
