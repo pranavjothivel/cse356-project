@@ -35,7 +35,7 @@ sinks:
     type: http
     inputs:
       - parse_haproxy
-    uri: https://api.axiom.co/v1/datasets/api-nodes/ingest
+    uri: https://api.axiom.co/v1/datasets/haproxy/ingest
     encoding:
       codec: json
     framing:
