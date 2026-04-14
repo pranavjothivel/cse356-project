@@ -28,6 +28,10 @@ const axiom = process.env.AXIOM_TOKEN
   ? new Axiom({ token: process.env.AXIOM_TOKEN })
   : null;
 
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+});
+
 const app = express();
 
 // Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
