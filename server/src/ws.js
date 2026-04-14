@@ -1,28 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
-/* lock is used as a mutex that works even between nodes
-   lock releases after 200ms in case locker failed to release, poll every 5ms
-
-   Currently all local user processing is done at the same time as redis user processing, so 
-   each block is wrapped in lock (replacing withUserPresenceLock callbacks)
-
-   Usage goes like this:
-   let release = async () => {}; // In case of error, since we don't know the cause, make sure release is always callable
-   try {
-    [processing not involving redis or local users]
-    release = await lock(redisClient, `lock:users:${id}`, lockOptions);
-    [some processing of redis and/or local users (mutex not necessary for read-only operations)]
-    await release();
-   }
-   catch (err) {
-    [some logic]
-    try { await release(); } catch (e) {}
-  }
-*/
-const { lock } = require('simple-redis-mutex');
-const lockOptions = { timeout: 200, pollingInterval: 5 };
-
 const { Op } = require('sequelize');
 const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
@@ -38,7 +16,6 @@ const serverId = crypto.randomUUID();
 // during the startup window.
 const subClient = redisClient.duplicate();
 subClient.on('error', (err) => console.error('Redis subscriber error:', err));
-
 
 function handleSubMessage(raw) {
   try {
@@ -122,7 +99,7 @@ function withUserPresenceLock(userId, fn) {
   Current structure in redis:
 
   HGET users:[id] body
-  HSET users:[id] body [string representation of body]
+  HGET users:[id] body [string representation of body]
   body:
     {
       presence - final presence used for display - "online" if any connection online, "away" if any away, "idle" if all idle
@@ -132,10 +109,16 @@ function withUserPresenceLock(userId, fn) {
         ...
       }
     }
-    
-  GET conns:[connId]
-  SET conns:[connId] 1 EX 60
-  Only care about existence - expiration needed so connections associated with downed server eventually disappear
+  Race condition is possible, but given that it requires the same user to spam presence updates across multiple connections, it can likely be ignored
+
+
+  Ideas (the following are not currently used in code, so feel free to remove these if you think of something better):
+
+  SADD/SREM [community id] [connection id of client currently on this community]
+  SMEMBERS community_id
+
+  SADD/SREM [channel_id] [connection id of client currently on this channel]
+  SMEMBERS channel_id
 */
 
 
@@ -145,107 +128,25 @@ function withUserPresenceLock(userId, fn) {
  * 
  * users: id -> { connId1: ws1, connId2: ws2, ... }
  * 
+ * Probably not useful outside of syncing the away state
  */
 const users = new Map();
 
 /**
  * Maps connection id to an object containing the ws connection and other data
  * 
- * connections: connId -> { userId, ws }
+ * connections: connId -> { ws }
  * 
+ * Might be useful to add communityId, channelId, etc. to object
  */
 const connections = new Map();
 
-function pingLocalConnections() {
-  let time1 = Date.now();
-  console.log('Pinging local connections...');
-  let connectionsArray = [...connections];
-  for (let i = 0; i < connectionsArray.length; i++) {
-    let ws;
-    try { ws = connectionsArray[i][1].ws; } catch (e) {}
-    if (!ws) continue;
+/*
+  Ideas (again, feel free to remove these comments if you think of something better):
 
-    try {
-      ws.ping();
-    }
-    catch (e) {ws.close();}
-  }
-
-  let time2 = Date.now();
-  console.log(`Successfully pinged local connections in ${time2-time1}ms`);
-  setTimeout(() => {pingLocalConnections()}, 30000);
-}
-setTimeout(() => {pingLocalConnections()}, 30000);
-
-
-async function cleanConnections() {
-  let time1 = Date.now();
-  console.log('Cleaning connections...');
-
-  const results = [];
-  for await (const key of redisClient.scanIterator({
-    MATCH: 'users:*',
-    COUNT: 100
-  })) {
-    results.push(key);
-  }
-  const allusers = results.flat();
-  for (let i = 0; i < allusers.length; i++) {
-    if (i > 0 && i % 100 === 0) {
-      console.log("Cleaned connections of 100 users");
-    }
-    let release = async () => {};
-    try {
-      release = await lock(redisClient, `lock:${allusers[i]}`, lockOptions);
-      const raw = await redisClient.hGet(allusers[i], "body");
-      if (!raw) {
-        await release();
-        return;
-      }
-
-      const redisUser = JSON.parse(raw);
-      const connIds = Object.keys(redisUser.conns);
-      const userId = allusers[i].slice(6);
-      const user = users.get(userId);
-
-      for (let j = 0; j < connIds.length; j++) {
-        let connId = connIds[j];
-        let conn = await redisClient.get(`conns:${connId}`);
-        if (!conn) {
-          delete redisUser.conns[connId];
-          let ws = connections.get(connId);
-          if (ws) {
-            delete user[connId];
-            connections.delete(connId);
-            ws.close();
-          }
-        }
-      }
-
-      if (Object.keys(redisUser.conns).length === 0) {
-        await redisClient.del(allusers[i]);
-        users.delete(userId);
-      }
-      else {
-        await redisClient.hSet(allusers[i], "body", JSON.stringify(redisUser));
-      }
-
-      await release();
-    }
-    catch (err) {
-      console.log(err);
-      try { await release() } catch (e) { console.log(e); }
-    }
-  }
-  let time2 = Date.now();
-  console.log(`Cleaned connections in ${time2-time1}ms`);
-
-  setTimeout(() => {cleanConnections()}, 120000);
-}
-
-// Start cycle so that chance of server cleanups overlapping probabilistically negligible
-//setTimeout(() => {cleanConnections()}, Math.floor(Math.random(10000, 30000)))
-
+  communities: community_id -> { connId1: ws1, connId2: ws2, ... }
+  channels: channels_id -> { connId1: ws1, connId2: ws2, ... }
+*/
 
 
 /**
@@ -387,7 +288,6 @@ const configureWSServer = (wss) => {
     let id;
 
     ws.on('message', async (data) => {
-      let release = async () => {};
       try {
         const msg = JSON.parse(data);
 
@@ -396,158 +296,144 @@ const configureWSServer = (wss) => {
 
           if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
 
-          release = await lock(redisClient, `lock:users:${id}`, lockOptions);
-          const conns = users.get(id);
-          const raw = await redisClient.hGet(`users:${id}`, "body");
-          if (!raw) {
-            await release();
-            return; // connection closed between reads
-          }
-          const redisUser = JSON.parse(raw);
-          const prevFinalPresence = redisUser.presence;
+          // Serialize the read-modify-write block per user so two in-flight
+          // presence updates cannot race each other's prevFinalPresence check
+          // and suppress a legitimate presence.changed broadcast.
+          await withUserPresenceLock(id, async () => {
+            const conns = users.get(id);
+            const raw = await redisClient.hGet(`users:${id}`, "body");
+            if (!raw) return; // connection closed between reads
+            const redisUser = JSON.parse(raw);
+            const prevFinalPresence = redisUser.presence;
 
-          if (newPresence === "away") {
-            // Set each of the user's connections to away and notify them.
-            // Remember each conn's pre-away idle/online state in `base`
-            // so unaway can restore it instead of slamming every conn to
-            // 'online'.
-            Object.keys(redisUser.conns).forEach((k) => {
-              const c = redisUser.conns[k];
-              if (c.presence !== "away") c.base = c.presence;
-              c.presence = "away";
-              if (conns && conns[k]) {
-                try { conns[k].send("away"); } catch (e) { /* ignore */ }
-              }
-            });
-          }
-          else if (newPresence === "unaway") {
-            // Restore each conn's remembered idle/online state. Fall back
-            // to 'online' if `base` is missing (legacy entries written
-            // before the base field existed).
-            Object.keys(redisUser.conns).forEach((k) => {
-              const c = redisUser.conns[k];
-              const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
-              c.presence = restore;
-              c.base = restore;
-              if (conns && conns[k]) {
-                try { conns[k].send("unaway"); } catch (e) { /* ignore */ }
-              }
-            });
-          }
-          else {
-            const user = await User.findOne({ where: { id } });
-            const c = redisUser.conns[connId];
-            if (c) {
-              if (!user || !user.away) {
-                // Not away: the conn's effective presence tracks activity.
-                c.presence = newPresence;
-                c.base = newPresence;
-              } else {
-                // Away: keep `presence:'away'` as the override, but update
-                // `base` so a later unaway restores the conn to the current
-                // idle/online state rather than the state at away-time.
-                c.base = newPresence;
+            if (newPresence === "away") {
+              // Set each of the user's connections to away and notify them.
+              // Remember each conn's pre-away idle/online state in `base`
+              // so unaway can restore it instead of slamming every conn to
+              // 'online'.
+              Object.keys(redisUser.conns).forEach((k) => {
+                const c = redisUser.conns[k];
+                if (c.presence !== "away") c.base = c.presence;
+                c.presence = "away";
+                if (conns && conns[k]) {
+                  try { conns[k].send("away"); } catch (e) { /* ignore */ }
+                }
+              });
+            }
+            else if (newPresence === "unaway") {
+              // Restore each conn's remembered idle/online state. Fall back
+              // to 'online' if `base` is missing (legacy entries written
+              // before the base field existed).
+              Object.keys(redisUser.conns).forEach((k) => {
+                const c = redisUser.conns[k];
+                const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
+                c.presence = restore;
+                c.base = restore;
+                if (conns && conns[k]) {
+                  try { conns[k].send("unaway"); } catch (e) { /* ignore */ }
+                }
+              });
+            }
+            else {
+              const user = await User.findOne({ where: { id } });
+              const c = redisUser.conns[connId];
+              if (c) {
+                if (!user || !user.away) {
+                  // Not away: the conn's effective presence tracks activity.
+                  c.presence = newPresence;
+                  c.base = newPresence;
+                } else {
+                  // Away: keep `presence:'away'` as the override, but update
+                  // `base` so a later unaway restores the conn to the current
+                  // idle/online state rather than the state at away-time.
+                  c.base = newPresence;
+                }
               }
             }
-          }
 
-          // Determine final display presence: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
-          }
-          redisUser.presence = finalPresence;
+            // Determine final display presence: away > online > idle
+            let finalPresence = "idle";
+            for (const cid of Object.keys(redisUser.conns)) {
+              const p = redisUser.conns[cid].presence;
+              if (p === "away") { finalPresence = "away"; break; }
+              if (p === "online") finalPresence = "online";
+            }
+            redisUser.presence = finalPresence;
 
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+            await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Sync user's own other sessions (cross-server) for away/unaway
-          if (newPresence === "away" || newPresence === "unaway") {
-            redisClient.publish("messages", JSON.stringify({
-              serverId,
-              msg: { id, type: msg.type, value: msg.value }
-            }));
-          }
+            // Sync user's own other sessions (cross-server) for away/unaway
+            if (newPresence === "away" || newPresence === "unaway") {
+              redisClient.publish("messages", JSON.stringify({
+                serverId,
+                msg: { id, type: msg.type, value: msg.value }
+              }));
+            }
 
-          // Broadcast to relevant users whenever final presence actually changed
-          if (finalPresence !== prevFinalPresence) {
-            broadcastPresenceChange(id, finalPresence);
-          }
-
-          await release();
+            // Broadcast to relevant users whenever final presence actually changed
+            if (finalPresence !== prevFinalPresence) {
+              broadcastPresenceChange(id, finalPresence);
+            }
+          });
         }
-      }
-      catch (err) {
-        console.log(err);
-        try { await release() } catch (e) { console.log(e); }
-        try { ws.send('error'); } catch (e) { /* ignore */ }
-        ws.close();
-      }
-    });
 
-    ws.on('pong', async () => {
-      try {
-        await redisClient.set(`conns:${connId}`, 1, { EX: 60 });
       }
       catch (err) {
         console.log(err);
+        try { ws.send('error'); } catch (e) { /* ignore */ }
         ws.close();
       }
     });
 
     ws.on('close', async () => {
       if (!id) return; // init failed, nothing to clean up
-
-      let release = async () => {};
       try {
-        release = await lock(redisClient, `lock:users:${id}`, lockOptions);
-        const raw = await redisClient.hGet(`users:${id}`, "body");
-        if (!raw) {
-          // Already cleaned up (e.g. by a concurrent close)
+        await withUserPresenceLock(id, async () => {
+          const raw = await redisClient.hGet(`users:${id}`, "body");
+          if (!raw) {
+            // Already cleaned up (e.g. by a concurrent close)
+            connections.delete(connId);
+            return;
+          }
+          const redisUser = JSON.parse(raw);
+          const connIds = Object.keys(redisUser.conns);
+
           connections.delete(connId);
-          await release();
-          return;
-        }
-        const redisUser = JSON.parse(raw);
-        const connIds = Object.keys(redisUser.conns);
 
-        connections.delete(connId);
+          // "Last connection" is determined by whether this close removes the
+          // only remaining conn — check against the conn set that actually
+          // contains our connId to avoid racing with a concurrent init.
+          if (connIds.length <= 1 && redisUser.conns[connId]) {
+            await redisClient.del(`users:${id}`);
+            users.delete(id);
+            broadcastPresenceChange(id, 'offline');
+          }
+          else {
+            delete redisUser.conns[connId];
+            const localConns = users.get(id);
+            if (localConns) delete localConns[connId];
 
-        // "Last connection" is determined by whether this close removes the
-        // only remaining conn — check against the conn set that actually
-        // contains our connId to avoid racing with a concurrent init.
-        if (connIds.length <= 1 && redisUser.conns[connId]) {
-          await redisClient.del(`users:${id}`);
-          users.delete(id);
-          broadcastPresenceChange(id, 'offline');
-        }
-        else {
-          delete redisUser.conns[connId];
-          const localConns = users.get(id);
-          if (localConns) delete localConns[connId];
+            // Recalculate presence with remaining connections: away > online > idle
+            let finalPresence = "idle";
+            for (const cid of Object.keys(redisUser.conns)) {
+              const p = redisUser.conns[cid].presence;
+              if (p === "away") { finalPresence = "away"; break; }
+              if (p === "online") finalPresence = "online";
+            }
 
-          // Recalculate presence with remaining connections: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
+            const prevFinalPresence = redisUser.presence;
+            redisUser.presence = finalPresence;
+            await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+
+            if (finalPresence !== prevFinalPresence) {
+              broadcastPresenceChange(id, finalPresence);
+            }
           }
 
-          const prevFinalPresence = redisUser.presence;
-          redisUser.presence = finalPresence;
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-
-          if (finalPresence !== prevFinalPresence) {
-            broadcastPresenceChange(id, finalPresence);
-          }
-        }
-
-        console.log('Client disconnected');
+          console.log('Client disconnected');
+        });
       }
       catch (err) {
-        try { await release() } catch (e) { console.log(e); }
         console.log(err);
       }
     });
@@ -576,9 +462,7 @@ const configureWSServer = (wss) => {
       // auth state flips before HomeScreen's ready-handler reads
       // auth.user.away and sends the initial presence frame.
 
-      let initRelease = async () => {};
-      try {
-        initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
+      await withUserPresenceLock(id, async () => {
         const existingStr = await redisClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;
@@ -622,14 +506,8 @@ const configureWSServer = (wss) => {
           users.set(id, conns);
         }
         else conns[connId] = ws;
-        connections.set(connId, { userId: id, ws });
-        await redisClient.set(`conns:${connId}`, 1, { EX: 60 });
-
-        await initRelease();
-      }
-      catch (err) {
-        try { await initRelease() } catch (e) { console.log(e); }
-      }
+        connections.set(connId, { ws });
+      });
 
       // Order matters: push the "unaway" in-band frame BEFORE "ready" so the
       // client's ready-handler (HomeScreen.tsx) reads the corrected
@@ -670,5 +548,4 @@ module.exports = {
   getCoCommunityUserIds,
   initWS,
   withUserPresenceLock,
-  lockOptions
 };
