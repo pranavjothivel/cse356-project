@@ -43,7 +43,7 @@ app.use((req, res, next) => {
   if (axiom) {
     res.on('finish', () => {
       if (res.statusCode >= 400) {
-        axiom.ingest('http-errors', [{
+        axiom.ingest('api-nodes', [{
           status: res.statusCode,
           method: req.method,
           path: req.path,
