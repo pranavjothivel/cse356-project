@@ -23,6 +23,11 @@ const messagesRouter = require('./routes/messages');
 const redisClient = require('./redis');
 const { configureWSServer, initWS } = require('./ws');
 
+const { Axiom } = require('@axiomhq/js');
+const axiom = process.env.AXIOM_TOKEN
+  ? new Axiom({ token: process.env.AXIOM_TOKEN })
+  : null;
+
 const app = express();
 
 // Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
@@ -33,6 +38,25 @@ app.set('trust proxy', 1);
  * route -> { reqs (number of requests), sumResponse (sum of response times) }
  */
 let metrics = new Map();
+
+app.use((req, res, next) => {
+  if (axiom) {
+    res.on('finish', () => {
+      if (res.statusCode >= 400) {
+        axiom.ingest('http-errors', [{
+          status: res.statusCode,
+          method: req.method,
+          path: req.path,
+          body: req.body,
+          ip: req.ip,
+          userId: req.user?.id || null,
+          ts: new Date().toISOString(),
+        }]);
+      }
+    });
+  }
+  next();
+});
 
 app.use((req, res, next) => {
   // Make sure to replace uuid route params with :id
