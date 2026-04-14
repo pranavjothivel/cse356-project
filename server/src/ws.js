@@ -191,6 +191,9 @@ async function cleanConnections() {
   }
   const allusers = results.flat();
   for (let i = 0; i < allusers.length; i++) {
+    if (i > 0 && i % 100 === 0) {
+      console.log("Cleaned connections of 100 users");
+    }
     let release = async () => {};
     try {
       release = await lock(redisClient, `lock:${allusers[i]}`, lockOptions);
@@ -237,7 +240,7 @@ async function cleanConnections() {
   let time2 = Date.now();
   console.log(`Cleaned connections in ${time2-time1}ms`);
 
-  setTimeout(() => {cleanConnections()}, 10000);
+  setTimeout(() => {cleanConnections()}, 120000);
 }
 
 // Start cycle so that chance of server cleanups overlapping probabilistically negligible
