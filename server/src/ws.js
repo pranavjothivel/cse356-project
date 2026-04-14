@@ -200,7 +200,7 @@ async function cleanConnections() {
       const raw = await redisClient.hGet(allusers[i], "body");
       if (!raw) {
         await release();
-        return;
+        continue;
       }
 
       const redisUser = JSON.parse(raw);
@@ -213,11 +213,11 @@ async function cleanConnections() {
         let conn = await redisClient.get(`conns:${connId}`);
         if (!conn) {
           delete redisUser.conns[connId];
-          let ws = connections.get(connId);
-          if (ws) {
+          let conn = connections.get(connId);
+          if (conn) {
             delete user[connId];
             connections.delete(connId);
-            ws.close();
+            try { conn.ws.close(); } catch (e) {}
           }
         }
       }
@@ -244,7 +244,7 @@ async function cleanConnections() {
 }
 
 // Start cycle so that chance of server cleanups overlapping probabilistically negligible
-setTimeout(() => {cleanConnections()}, Math.floor(Math.random(10000, 30000)))
+setTimeout(() => {cleanConnections()}, Math.floor(Math.random() * 20000 + 10000))
 
 
 
