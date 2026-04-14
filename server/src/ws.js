@@ -174,6 +174,15 @@ function deliverLocal(userIds, payload) {
   }
 }
 
+
+let broadcastMetrics = { numMessages: 0, sumProcessing: 0 };
+function logBroadcastMetrics() {
+  let avg = 0;
+  if (broadcastMetrics.numMessages > 0) avg = broadcastMetrics.sumProcessing / broadcastMetrics.numMessages;
+  console.log(`Message Broadcast Metrics: ${broadcastMetrics.numMessages} broadcasts, ${avg} ms average time to broadcast`);
+}
+setInterval(logBroadcastMetrics, 30000);
+
 /**
  * Fan out a JSON payload to all sessions of the given user ids, across every
  * server in the cluster. Use this from REST handlers when a write needs to
@@ -181,11 +190,17 @@ function deliverLocal(userIds, payload) {
  */
 function broadcastToUsers(userIds, payload) {
   if (!userIds || userIds.length === 0) return;
+  let date1 = Date.now();
+  
   deliverLocal(userIds, payload);
   redisClient.publish('messages', JSON.stringify({
     serverId,
     msg: { type: 'fanout', userIds, payload },
   }));
+
+  let date2 = Date.now();
+  broadcastMetrics.numMessages++;
+  broadcastMetrics.sumProcessing += date2 - date1;
 }
 
 /**
