@@ -42,18 +42,15 @@ let metrics = new Map();
 app.use((req, res, next) => {
   if (axiom) {
     res.on('finish', () => {
-      if (res.statusCode >= 400) {
-        axiom.ingest('api-nodes', [{
-          status: res.statusCode,
-          method: req.method,
-          path: req.path,
-          body: req.body,
-          ip: req.ip,
-          userId: req.user?.id || null,
-          ts: new Date().toISOString(),
-        }]);
-        axiom.flush().catch(() => {});
-      }
+      axiom.ingest('api-nodes', [{
+        status: res.statusCode,
+        method: req.method,
+        path: req.originalUrl,
+        body: req.body,
+        ip: req.ip,
+        userId: req.user?.id || null,
+        ts: new Date().toISOString(),
+      }]);
     });
   }
   next();

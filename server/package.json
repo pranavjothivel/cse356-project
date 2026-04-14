@@ -11,8 +11,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@axiomhq/js": "^1.6.0",
-    "@sentry/node": "^10.48.0",
     "bcrypt": "^6.0.0",
     "connect-redis": "^9.0.0",
     "cors": "^2.8.6",
@@ -32,7 +30,6 @@
     "pg-hstore": "^2.3.4",
     "redis": "^5.11.0",
     "sequelize": "^6.37.8",
-    "simple-redis-mutex": "^3.0.0",
     "ws": "^8.20.0"
   }
 }
