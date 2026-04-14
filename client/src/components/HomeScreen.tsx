@@ -87,6 +87,17 @@ export default function HomeScreen() {
 
     useEffect(() => {
         if (auth.loggedIn) {
+            if (auth.user.away) {
+                sendMsg({type: "presence", value: "away"});
+            }
+            else if (auth.user.away === false) {
+                sendMsg({type: "presence", value: "unaway"});
+            }
+        }
+    }, [auth.user?.away]);
+
+    useEffect(() => {
+        if (auth.loggedIn) {
             if (auth.user.away === false) {
                 if (idle) {
                     sendMsg({type: "presence", value: "idle"});
@@ -97,17 +108,6 @@ export default function HomeScreen() {
             }
         }
     }, [idle, auth.user?.away]);
-
-    useEffect(() => {
-        if (auth.loggedIn) {
-            if (auth.user.away) {
-                sendMsg({type: "presence", value: "away"});
-            }
-            else if (auth.user.away === false) {
-                sendMsg({type: "presence", value: "unaway"});
-            }
-        }
-    }, [auth.user?.away]);
 
     useEffect(() => {
         const linked = searchParams.get('linked');
