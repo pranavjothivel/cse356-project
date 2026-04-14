@@ -244,7 +244,7 @@ async function cleanConnections() {
 }
 
 // Start cycle so that chance of server cleanups overlapping probabilistically negligible
-setTimeout(() => {cleanConnections()}, Math.floor(Math.random(10000, 30000)))
+//setTimeout(() => {cleanConnections()}, Math.floor(Math.random(10000, 30000)))
 
 
 
