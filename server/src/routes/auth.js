@@ -4,10 +4,11 @@ const passport = require('passport');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
+const { lock } = require('simple-redis-mutex');
 
 const User = require('../models/User');
 const { minioClient, BUCKET } = require('../upload');
-const { broadcastPresenceChange, withUserPresenceLock, notifyUserAwayFrame } = require('../ws');
+const { broadcastPresenceChange, withUserPresenceLock, notifyUserAwayFrame, lockOptions } = require('../ws');
 const redisClient = require('../redis');
 
 // ──────────────────────────────────────────────
@@ -282,6 +283,7 @@ router.post('/settings/unlink', requireAuth, async (req, res, next) => {
 
 // POST /auth/settings/update-profile
 router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
+  let release = async () => {};
   try {
     const { displayName, away, away_msg } = req.body;
     if (displayName) req.user.display_name = displayName;
@@ -296,51 +298,53 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
     // the broadcast. Spec: away overrides online/idle.
     if (awayChanged) {
       const userId = req.user.id;
-      await withUserPresenceLock(userId, async () => {
-        let finalPresence = away ? 'away' : 'online';
-        const raw = await redisClient.hGet(`users:${userId}`, 'body');
-        if (raw) {
-          const redisUser = JSON.parse(raw);
-          // Preserve per-conn idle/online state across the toggle:
-          //   away=true  — remember each conn's current presence in `base`,
-          //                then set presence='away'
-          //   away=false — restore each conn's presence from `base`
-          // Legacy entries without `base` fall back to 'online'.
-          for (const cid of Object.keys(redisUser.conns)) {
-            const c = redisUser.conns[cid];
-            if (away) {
-              if (c.presence !== 'away') c.base = c.presence;
-              c.presence = 'away';
-            } else {
-              const restore = (c.base === 'idle' || c.base === 'online') ? c.base : 'online';
-              c.presence = restore;
-              c.base = restore;
-            }
+      release = await lock(redisClient, `lock:users:${userId}`, lockOptions);
+      let finalPresence = away ? 'away' : 'online';
+      const raw = await redisClient.hGet(`users:${userId}`, 'body');
+      if (raw) {
+        const redisUser = JSON.parse(raw);
+        // Preserve per-conn idle/online state across the toggle:
+        //   away=true  — remember each conn's current presence in `base`,
+        //                then set presence='away'
+        //   away=false — restore each conn's presence from `base`
+        // Legacy entries without `base` fall back to 'online'.
+        for (const cid of Object.keys(redisUser.conns)) {
+          const c = redisUser.conns[cid];
+          if (away) {
+            if (c.presence !== 'away') c.base = c.presence;
+            c.presence = 'away';
+          } else {
+            const restore = (c.base === 'idle' || c.base === 'online') ? c.base : 'online';
+            c.presence = restore;
+            c.base = restore;
           }
-          // Recompute final presence using the spec priority: away > online > idle
-          finalPresence = 'idle';
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === 'away') { finalPresence = 'away'; break; }
-            if (p === 'online') finalPresence = 'online';
-          }
-          redisUser.presence = finalPresence;
-          await redisClient.hSet(`users:${userId}`, 'body', JSON.stringify(redisUser));
         }
+        // Recompute final presence using the spec priority: away > online > idle
+        finalPresence = 'idle';
+        for (const cid of Object.keys(redisUser.conns)) {
+          const p = redisUser.conns[cid].presence;
+          if (p === 'away') { finalPresence = 'away'; break; }
+          if (p === 'online') finalPresence = 'online';
+        }
+        redisUser.presence = finalPresence;
+        await redisClient.hSet(`users:${userId}`, 'body', JSON.stringify(redisUser));
+      }
 
-        // Notify the user's own sessions (local + cross-server) so their UIs
-        // can flip state. Today only the WS-driven path did this.
-        notifyUserAwayFrame(userId, away ? 'away' : 'unaway');
+      // Notify the user's own sessions (local + cross-server) so their UIs
+      // can flip state. Today only the WS-driven path did this.
+      notifyUserAwayFrame(userId, away ? 'away' : 'unaway');
 
-        // Broadcast presence.changed to every other connected user. `finalPresence`
-        // reflects the recomputed state (so unaway correctly reports 'idle' when
-        // every remaining conn was idle before the away toggle).
-        broadcastPresenceChange(userId, finalPresence);
-      });
+      // Broadcast presence.changed to every other connected user. `finalPresence`
+      // reflects the recomputed state (so unaway correctly reports 'idle' when
+      // every remaining conn was idle before the away toggle).
+      broadcastPresenceChange(userId, finalPresence);
+
+      await release();
     }
 
     res.json({ message: 'Profile updated' });
   } catch (err) {
+    try { await release() } catch (e) { console.log(e); }
     next(err);
   }
 });
