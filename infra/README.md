@@ -1,6 +1,6 @@
 # Infrastructure
 
-All nodes are **Clanode 2G** Linodes on the CSE356 course cluster.
+All nodes are Linodes on the CSE356 course cluster (Clanode 4G unless noted).
 
 ## Node Inventory
 
@@ -8,6 +8,8 @@ All nodes are **Clanode 2G** Linodes on the CSE356 course cluster.
 |---|---|---|---|
 | `group1-api-node-01` | API app node (PM2 / Node.js) | `130.245.136.217` | `10.0.3.93` |
 | `group1-api-node-02` | API app node (PM2 / Node.js) | `130.245.136.149` | `10.0.1.121` |
+| `group1-api-node-03` | API app node (PM2 / Node.js) | `130.245.136.239` | `10.0.0.177` |
+| `group1-api-node-04` | API app node (PM2 / Node.js) — Clanode 2G | `130.245.136.223` | `10.0.3.44` |
 | `group1-db-psql-01` | PostgreSQL database | `130.245.136.224` | `10.0.1.235` |
 | `group1-db-redis-01` | Redis (sessions, pub/sub, presence) | `130.245.136.86` | `10.0.0.136` |
 | `group1-web-lb01` | Load balancer + frontend (Nginx) | `130.245.136.254` | — |

@@ -4,7 +4,7 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: 'postgres',
   logging: false,
   pool: {
-    max: 3,
+    max: 10,
     min: 1,
     idle: 10000,
   },
