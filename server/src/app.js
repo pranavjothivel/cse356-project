@@ -52,6 +52,7 @@ app.use((req, res, next) => {
           userId: req.user?.id || null,
           ts: new Date().toISOString(),
         }]);
+        axiom.flush().catch(() => {});
       }
     });
   }
