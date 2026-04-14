@@ -348,7 +348,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
                     style={{ flex: 1, background: "#222", color: "white", border: "1px solid #555", padding: "2px 6px" }}
                     autoFocus
                   />
-                  <input type="file" accept="image/*" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                  <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
                   <button className="btn-small" onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                   <button className="btn-small" onClick={saveEdit}>save</button>
                   <button className="btn-small" style={{ background: "#444" }} onClick={() => setEditingId(null)}>cancel</button>
@@ -432,7 +432,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
           placeholder={`Message #${channelName}`}
           style={{ flex: 1 }}
         />
-        <input type="file" accept="image/*" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+        <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
         <button className="btn-small" onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
         <button className="btn-small" onClick={sendMessage}>Send</button>
       </div>
