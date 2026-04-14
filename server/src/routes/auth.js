@@ -127,7 +127,7 @@ router.get('/me', requireAuth, (req, res) => {
     email,
     displayName: display_name,
     providers: (providers || []).map(p => ({ provider: p.provider, providerId: p.provider_id, displayName: p.display_name })),
-    hasPassword: !!req.user.password_hash,
+    hasPassword: !!req.user.password_hash || !!req.user.password,
     away,
     away_msg,
     avatar
@@ -247,7 +247,7 @@ router.post('/settings/set-password', requireAuth, async (req, res, next) => {
     const { currentPassword, newPassword } = req.body;
     if (!newPassword) return res.status(400).json({ error: 'New password is required' });
 
-    if (req.user.password_hash) {
+    if (req.user.password_hash || req.user.password) {
       if (!currentPassword) return res.status(400).json({ error: 'Current password is required' });
       const ok = await req.user.verifyPassword(currentPassword);
       if (!ok) return res.status(401).json({ error: 'Current password is incorrect' });
