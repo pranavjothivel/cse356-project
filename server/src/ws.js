@@ -292,12 +292,30 @@ async function broadcastPresenceChange(userId, presence) {
   });
 }
 
+
+let wsMessageMetrics = { numMessages: 0, sumProcessing: 0 };
+function updateWSMetrics(start_date) {
+  let end_date = Date.now();
+  wsMessageMetrics.numMessages++;
+  wsMessageMetrics.sumProcessing += end_date - start_date;
+}
+
+function logWSMetrics() {
+  let avg = 0;
+  if (wsMessageMetrics.numMessages > 0) avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
+  console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${avg} ms average processing time`);
+}
+setInterval(logWSMetrics, 30000);
+
+
 const configureWSServer = (wss) => {
   wss.on('connection', async (ws, req) => {
     let connId = crypto.randomUUID();
     let id;
 
     ws.on('message', async (data) => {
+      let date1 = Date.now();
+
       let release = async () => {};
       try {
         const msg = JSON.parse(data);
@@ -312,6 +330,7 @@ const configureWSServer = (wss) => {
           const raw = await redisClient.hGet(`users:${id}`, "body");
           if (!raw) {
             await release();
+            updateWSMetrics(date1);
             return; // connection closed between reads
           }
           const redisUser = JSON.parse(raw);
@@ -388,12 +407,15 @@ const configureWSServer = (wss) => {
 
           await release();
         }
+
+        updateWSMetrics(date1);
       }
       catch (err) {
         console.log(err);
         try { await release() } catch (e) { console.log(e); }
         try { ws.send('error'); } catch (e) { /* ignore */ }
         ws.close();
+        updateWSMetrics(date1);
       }
     });
 
