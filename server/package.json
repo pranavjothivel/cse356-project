@@ -11,7 +11,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@axiomhq/js": "^1.6.0",
     "@sentry/node": "^10.48.0",
     "bcrypt": "^6.0.0",
     "connect-redis": "^9.0.0",
