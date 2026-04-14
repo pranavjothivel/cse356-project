@@ -55,7 +55,7 @@ frontend https_front
     default_backend static_files
 
 backend app_servers
-    balance roundrobin
+    balance leastconn
     option httpchk GET /
 
     cookie SERVERID insert indirect nocache
