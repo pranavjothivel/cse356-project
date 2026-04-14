@@ -28,10 +28,6 @@ const axiom = process.env.AXIOM_TOKEN
   ? new Axiom({ token: process.env.AXIOM_TOKEN })
   : null;
 
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled rejection:', err);
-});
-
 const app = express();
 
 // Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
@@ -46,15 +42,18 @@ let metrics = new Map();
 app.use((req, res, next) => {
   if (axiom) {
     res.on('finish', () => {
-      axiom.ingest('api-nodes', [{
-        status: res.statusCode,
-        method: req.method,
-        path: req.originalUrl,
-        body: req.body,
-        ip: req.ip,
-        userId: req.user?.id || null,
-        ts: new Date().toISOString(),
-      }]);
+      if (res.statusCode >= 400) {
+        axiom.ingest('api-nodes', [{
+          status: res.statusCode,
+          method: req.method,
+          path: req.path,
+          body: req.body,
+          ip: req.ip,
+          userId: req.user?.id || null,
+          ts: new Date().toISOString(),
+        }]);
+        axiom.flush().catch(() => {});
+      }
     });
   }
   next();
