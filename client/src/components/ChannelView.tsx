@@ -26,6 +26,8 @@ interface Props {
   communityId: string;
   userRole: string;
   onRefresh: () => void;
+  jumpToMessageId?: string | null;
+  onJumpComplete?: () => void;
 }
 
 function authorLabel(msg: ChannelMessage): string {
@@ -35,7 +37,7 @@ function authorLabel(msg: ChannelMessage): string {
   return msg.authorId.slice(0, 8);
 }
 
-export default function ChannelView({ channelId, channelName, channelPrivate, userRole, onRefresh }: Props) {
+export default function ChannelView({ channelId, channelName, channelPrivate, userRole, onRefresh, jumpToMessageId, onJumpComplete }: Props) {
   const { auth } = useContext(AuthContext);
   const myId: string | undefined = auth.user?.id;
 
@@ -46,6 +48,8 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
   const [error, setError] = useState("");
   const [attachments, setAttachments] = useState<any[]>([]);
   const [editAttachments, setEditAttachments] = useState<any[]>([]);
+  const [viewingHistorical, setViewingHistorical] = useState(false);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,14 +66,15 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
 
   // Load messages on channel change
   useEffect(() => {
+    if (jumpToMessageId) return; // skip normal load if a jump is pending
     setMessages([]);
     setEditingId(null);
     setDraft("");
+    setViewingHistorical(false);
     const load = async () => {
       const res = await apiFetch(`/messages?channelId=${channelId}&limit=100`);
       if (res.ok) {
         const data = await res.json();
-        // Server returns newest-first; reverse for chronological display
         const msgs = data.messages.slice().reverse();
         setMessages(msgs);
         if (msgs.length > 0) markAsRead(msgs[msgs.length - 1].id);
@@ -78,10 +83,37 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
     load();
   }, [channelId, markAsRead]);
 
-  // Scroll to bottom when messages load or new message arrives
+  // Jump to a specific message
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (!jumpToMessageId) return;
+    setMessages([]);
+    setEditingId(null);
+    const jumpId = jumpToMessageId;
+    onJumpComplete?.();
+    const load = async () => {
+      const res = await apiFetch(`/messages?channelId=${channelId}&limit=100&around=${jumpId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const msgs = data.messages.slice().reverse();
+        setMessages(msgs);
+        setViewingHistorical(true);
+        setHighlightId(jumpId);
+        setTimeout(() => setHighlightId(null), 2000);
+        setTimeout(() => {
+          const el = document.getElementById(`msg-${jumpId}`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 50);
+      }
+    };
+    load();
+  }, [jumpToMessageId]);
+
+  // Scroll to bottom when messages load or new message arrives (skip when viewing historical)
+  useEffect(() => {
+    if (!viewingHistorical) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, viewingHistorical]);
 
   // Auto-mark as read when new messages arrive while viewing
   useEffect(() => {
@@ -114,7 +146,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
   }, [channelId]);
 
   const sendMessage = async () => {
-    if (!draft.trim()) return;
+    if (!draft.trim() && attachments.length === 0) return;
     setError("");
 
     let attachmentsToSend = [];
@@ -291,8 +323,15 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
         {messages.length === 0 && (
           <p className="placeholder-text">No messages yet. Say something!</p>
         )}
+        {viewingHistorical && (
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
+            <button className="btn-small" onClick={() => { setViewingHistorical(false); setMessages([]); const reload = async () => { const res = await apiFetch(`/messages?channelId=${channelId}&limit=100`); if (res.ok) { const data = await res.json(); setMessages(data.messages.slice().reverse()); } }; reload(); }}>
+              Jump to latest
+            </button>
+          </div>
+        )}
         {messages.map((m) => (
-          <div key={m.id} style={{ marginBottom: 8 }}>
+          <div key={m.id} id={`msg-${m.id}`} style={{ marginBottom: 8, transition: "background-color 0.5s", backgroundColor: highlightId === m.id ? "#4a3f00" : "transparent", borderRadius: 4, padding: highlightId === m.id ? "4px 6px" : undefined }}>
             <div style={{ fontSize: 12, color: "#888", marginBottom: 2 }}>
               <span style={{ color: "#ccc", fontWeight: 500 }}>{authorLabel(m)}</span>
               {" · "}
@@ -309,7 +348,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
                     style={{ flex: 1, background: "#222", color: "white", border: "1px solid #555", padding: "2px 6px" }}
                     autoFocus
                   />
-                  <input type="file" accept="image/*" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                  <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
                   <button className="btn-small" onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                   <button className="btn-small" onClick={saveEdit}>save</button>
                   <button className="btn-small" style={{ background: "#444" }} onClick={() => setEditingId(null)}>cancel</button>
@@ -393,7 +432,7 @@ export default function ChannelView({ channelId, channelName, channelPrivate, us
           placeholder={`Message #${channelName}`}
           style={{ flex: 1 }}
         />
-        <input type="file" accept="image/*" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+        <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
         <button className="btn-small" onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
         <button className="btn-small" onClick={sendMessage}>Send</button>
       </div>

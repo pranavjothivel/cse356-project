@@ -77,7 +77,7 @@ jobs:
             cd /srv/app
             # Ensure uploads directory exists and is writable
             mkdir -p /srv/app/uploads
-            npm ci --omit=dev
+            npm install --omit=dev --prefer-offline
             if pm2 describe cse356 > /dev/null 2>&1; then
               pm2 reload ecosystem.config.js --update-env
             else
@@ -158,6 +158,15 @@ jobs:
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
+
+      - name: Deploy Vector config to LB node
+        run: |
+          sed "s|\${AXIOM_TOKEN_LB}|${{ secrets.AXIOM_TOKEN_LB }}|g" \
+            infra/vector/vector.yaml \
+            | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+              root@${{ needs.setup.outputs.lb }} "cat > /etc/vector/vector.yaml"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} "systemctl reload-or-restart vector"
 
   deploy-lb-configs:
     name: Deploy LB configs (HAProxy + Nginx)

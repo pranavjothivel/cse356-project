@@ -1,0 +1,53 @@
+sources:
+  haproxy_logs:
+    type: file
+    include:
+      - /var/log/haproxy.log
+    read_from: end
+
+transforms:
+  parse_haproxy:
+    type: remap
+    inputs:
+      - haproxy_logs
+    source: |
+      parsed, err = parse_regex(.message, r'(?P<client_ip>\d+\.\d+\.\d+\.\d+):\d+ \[(?P<timestamp>[^\]]+)\] (?P<frontend>\S+) (?P<backend>\S+)/(?P<server>\S+) (?P<tr>-?\d+)/(?P<tw>-?\d+)/(?P<tc>-?\d+)/(?P<tr_resp>-?\d+)/(?P<tt>-?\d+) (?P<status_code>\d+) (?P<bytes_read>\d+) .* \"(?P<method>\w+) (?P<path>\S+) HTTP')
+      if err != null {
+        abort
+      }
+      .client_ip   = parsed.client_ip
+      .frontend    = parsed.frontend
+      .backend     = parsed.backend
+      .server      = parsed.server
+      .status_code = to_int!(parsed.status_code)
+      .bytes_read  = to_int!(parsed.bytes_read)
+      .method      = parsed.method
+      .path        = parsed.path
+      .tr          = to_int!(parsed.tr)
+      .tw          = to_int!(parsed.tw)
+      .tc          = to_int!(parsed.tc)
+      .tr_resp     = to_int!(parsed.tr_resp)
+      .tt          = to_int!(parsed.tt)
+      del(.source_type)
+      del(.file)
+
+  filter_errors:
+    type: filter
+    inputs:
+      - parse_haproxy
+    condition: to_int!(.status_code) >= 400
+
+sinks:
+  axiom:
+    type: http
+    inputs:
+      - filter_errors
+    uri: https://api.axiom.co/v1/datasets/haproxy/ingest
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Authorization: Bearer ${AXIOM_TOKEN_LB}
+        Content-Type: application/x-ndjson

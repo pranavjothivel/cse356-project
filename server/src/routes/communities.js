@@ -175,32 +175,42 @@ router.post('/:communityId/join', async (req, res, next) => {
     const community = await Community.findByPk(req.params.communityId);
     if (!community) return res.status(404).json({ error: 'Community not found' });
 
-    let alreadyMember = false;
     await sequelize.transaction(async (t) => {
-      const [, created] = await CommunityMember.findOrCreate({
+      await CommunityMember.findOrCreate({
         where: { community_id: community.id, user_id: req.user.id },
         defaults: { role: 'member' },
         transaction: t,
       });
-      if (!created) { alreadyMember = true; return; }
 
-      // Auto-join all public channels (atomic with community membership)
       const publicChannels = await Channel.findAll({
         where: { community_id: community.id, is_private: false },
         attributes: ['id'],
         transaction: t,
       });
+
       if (publicChannels.length > 0) {
         await ChannelMember.bulkCreate(
           publicChannels.map(c => ({ channel_id: c.id, user_id: req.user.id })),
           { ignoreDuplicates: true, transaction: t }
         );
+
+        const enrolled = await ChannelMember.count({
+          where: { channel_id: publicChannels.map(c => c.id), user_id: req.user.id },
+          transaction: t,
+        });
+        if (enrolled !== publicChannels.length) {
+          throw new Error('channel_enrollment_failed');
+        }
       }
     });
 
-    if (alreadyMember) return res.status(400).json({ error: 'Already a member' });
     res.json({ message: 'Joined community' });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.message === 'channel_enrollment_failed') {
+      return res.status(500).json({ error: 'Failed to enroll in community channels, please try again' });
+    }
+    next(err);
+  }
 });
 
 // POST /:communityId/leave — Leave community

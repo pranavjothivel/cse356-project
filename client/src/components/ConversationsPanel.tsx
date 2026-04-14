@@ -75,6 +75,9 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     const selected = conversations.find(c => c.id === selectedId) || null;
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [showSearch, setShowSearch] = useState(false);
+    const [jumpToMessageId, setJumpToMessageId] = useState<string | null>(null);
+    const [viewingHistorical, setViewingHistorical] = useState(false);
+    const [highlightId, setHighlightId] = useState<string | null>(null);
     // userId -> lastReadMessageId for the selected conversation
     const [readState, setReadState] = useState<Map<string, string | null>>(new Map());
     const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,6 +105,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
             const body = await api(`/messages?conversationId=${convId}&limit=100`);
             // Server returns newest-first; flip for display
             setMessages(body.messages.slice().reverse());
+            setViewingHistorical(false);
         } catch (err: any) { setError(err.message); }
     }, []);
 
@@ -134,7 +138,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
 
     useEffect(() => {
         if (selectedId) {
-            loadMessages(selectedId);
+            if (!jumpToMessageId) loadMessages(selectedId);
             loadReadState(selectedId);
         } else {
             setMessages([]);
@@ -142,9 +146,32 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
         }
     }, [selectedId, loadMessages, loadReadState]);
 
+    // Jump to a specific message in a conversation
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages]);
+        if (!jumpToMessageId || !selectedId) return;
+        const jumpId = jumpToMessageId;
+        setJumpToMessageId(null);
+        const load = async () => {
+            try {
+                const body = await api(`/messages?conversationId=${selectedId}&limit=100&around=${jumpId}`);
+                setMessages(body.messages.slice().reverse());
+                setViewingHistorical(true);
+                setHighlightId(jumpId);
+                setTimeout(() => setHighlightId(null), 2000);
+                setTimeout(() => {
+                    const el = document.getElementById(`conv-msg-${jumpId}`);
+                    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                }, 50);
+            } catch (err: any) { setError(err.message); }
+        };
+        load();
+    }, [jumpToMessageId, selectedId]);
+
+    useEffect(() => {
+        if (!viewingHistorical) {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
+    }, [messages, viewingHistorical]);
 
     // Auto-mark as read when viewing a conversation with messages
     useEffect(() => {
@@ -240,7 +267,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
     };
 
     const sendMessage = async () => {
-        if (!selected || !draft.trim()) return;
+        if (!selected || (!draft.trim() && attachments.length === 0)) return;
 
         let attachmentsToSend = [];
         for (let i = 0; i < attachments.length; i++) {
@@ -491,6 +518,13 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                             );
                         })()}
                         <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
+                            {viewingHistorical && (
+                                <div style={{ textAlign: "center", marginBottom: 8 }}>
+                                    <button style={{ fontSize: 12 }} onClick={() => { setViewingHistorical(false); if (selectedId) loadMessages(selectedId); }}>
+                                        Jump to latest
+                                    </button>
+                                </div>
+                            )}
                             {messages.map(m => {
                                 // Collect readers (other users) whose lastReadMessageId === this message
                                 const readers = selected
@@ -499,7 +533,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                         .map(p => p.username || p.displayName || p.id.slice(0, 8))
                                     : [];
                                 return (
-                                    <div key={m.id} style={{ marginBottom: 6, fontSize: 13 }}>
+                                    <div key={m.id} id={`conv-msg-${m.id}`} style={{ marginBottom: 6, fontSize: 13, transition: "background-color 0.5s", backgroundColor: highlightId === m.id ? "#4a3f00" : "transparent", borderRadius: 4, padding: highlightId === m.id ? "4px 6px" : undefined }}>
                                         <span style={{ color: "#888", fontSize: 11 }}>
                                             {userLabel(m.authorId)} · {new Date(m.createdAt).toLocaleTimeString()}
                                             {m.editedAt && " (edited)"}
@@ -509,7 +543,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                                 ? (
                                                     <span>
                                                         <input value={editDraft} onChange={e => setEditDraft(e.target.value)} />
-                                                        <input type="file" accept="image/*" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
+                                                        <input type="file" ref={editFileInputRef} style={{display: "none"}} multiple onChange={editAttach} />
                                                         <button onClick={() => {if (editFileInputRef.current) editFileInputRef.current.click()}}>Attach</button>
                                                         <button onClick={saveEdit}>save</button>
                                                         <button onClick={() => setEditingId(null)}>cancel</button>
@@ -586,7 +620,7 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                                     padding: "4px 6px",
                                 }}
                             />
-                            <input type="file" accept="image/*" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
+                            <input type="file" ref={fileInputRef} style={{display: "none"}} multiple onChange={attach} />
                             <button onClick={() => {if (fileInputRef.current) fileInputRef.current.click()}}>Attach</button>
                             <button onClick={sendMessage}>send</button>
                         </div>
@@ -622,6 +656,13 @@ export default function ConversationsPanel({ unreadConvIds, setUnreadConvIds }: 
                     scope="conversation"
                     scopeId={selected.id}
                     onClose={() => setShowSearch(false)}
+                    onJumpTo={(result) => {
+                        if (result.conversationId) {
+                            setSelectedId(result.conversationId);
+                            setJumpToMessageId(result.id);
+                        }
+                        setShowSearch(false);
+                    }}
                 />
             )}
             {error && (

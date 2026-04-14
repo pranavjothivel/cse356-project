@@ -28,6 +28,7 @@ export default function CommunityView({ communityId, onLeft }: Props) {
   const [data, setData] = useState<CommunityData | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
+  const [jumpToMessageId, setJumpToMessageId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     const res = await apiFetch(`/communities/${communityId}`);
@@ -103,7 +104,7 @@ export default function CommunityView({ communityId, onLeft }: Props) {
           onRefresh={fetchData}
         />
         {selectedChannel && selectedChannel.is_joined ? (
-          <ChannelView channelId={selectedChannel.id} channelName={selectedChannel.name} channelPrivate={selectedChannel.is_private} communityId={communityId} userRole={data.role} onRefresh={fetchData}/>
+          <ChannelView channelId={selectedChannel.id} channelName={selectedChannel.name} channelPrivate={selectedChannel.is_private} communityId={communityId} userRole={data.role} onRefresh={fetchData} jumpToMessageId={jumpToMessageId} onJumpComplete={() => setJumpToMessageId(null)}/>
         ) : (
           <div className="channel-view">
             <p className="placeholder-text">Select a channel</p>
@@ -116,6 +117,13 @@ export default function CommunityView({ communityId, onLeft }: Props) {
           scope="community"
           scopeId={communityId}
           onClose={() => setShowSearch(false)}
+          onJumpTo={(result) => {
+            if (result.channelId) {
+              setSelectedChannelId(result.channelId);
+              setJumpToMessageId(result.id);
+            }
+            setShowSearch(false);
+          }}
         />
       )}
     </>

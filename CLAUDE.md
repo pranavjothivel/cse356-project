@@ -33,6 +33,7 @@ OIDC_CLIENT_SECRET=    # web-service-secret
 OIDC_CALLBACK_URL=
 NODE_ENV=              # development | production
 PORT=                  # defaults to 3000
+AXIOM_TOKEN=           # Axiom API token for HTTP error logging (optional, logging disabled if unset)
 ```
 
 ## Architecture

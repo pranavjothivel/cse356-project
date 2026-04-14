@@ -62,8 +62,8 @@ async function getConversationParticipantIds(conversationId) {
   return parts.map(p => p.user_id);
 }
 
-// GET /api/messages?channelId=X[&before=Y&limit=N]
-// GET /api/messages?conversationId=X[&before=Y&limit=N]
+// GET /api/messages?channelId=X[&before=Y&around=Y&limit=N]
+// GET /api/messages?conversationId=X[&before=Y&around=Y&limit=N]
 router.get('/', async (req, res, next) => {
   try {
     const { channelId, conversationId } = req.query;
@@ -72,12 +72,60 @@ router.get('/', async (req, res, next) => {
     }
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
 
+    // Helper: load messages around a target message (for jump-to-message)
+    const loadAround = async (scopeWhere, includeOpts) => {
+      const half = Math.floor(limit / 2);
+      const cursor = await Message.findByPk(req.query.around, { attributes: ['id', 'created_at'] });
+      if (!cursor) {
+        // Target not found — fall back to latest messages
+        const messages = await Message.findAll({
+          where: scopeWhere,
+          include: includeOpts,
+          order: [['created_at', 'DESC'], ['id', 'DESC']],
+          limit,
+        });
+        return messages;
+      }
+      // Messages before the target (older), newest-first
+      const beforeWhere = { ...scopeWhere, ...await buildMessageCursor(req.query.around, 'before') };
+      const beforeMsgs = await Message.findAll({
+        where: beforeWhere,
+        include: includeOpts,
+        order: [['created_at', 'DESC'], ['id', 'DESC']],
+        limit: half,
+      });
+      // Messages after the target (newer) + target itself, oldest-first then reverse
+      const afterCursor = await buildMessageCursor(req.query.around, 'after');
+      const afterWhere = afterCursor ? { ...scopeWhere, ...afterCursor } : scopeWhere;
+      const afterMsgs = await Message.findAll({
+        where: afterWhere,
+        include: includeOpts,
+        order: [['created_at', 'ASC'], ['id', 'ASC']],
+        limit: half,
+      });
+      // Fetch the target message itself
+      const targetMsg = await Message.findOne({
+        where: { ...scopeWhere, id: req.query.around },
+        include: includeOpts,
+      });
+      // Combine: all in newest-first order
+      const combined = [...afterMsgs.reverse(), ...(targetMsg ? [targetMsg] : []), ...beforeMsgs];
+      return combined;
+    };
+
     if (channelId) {
       // Verify membership
       const member = await ChannelMember.findOne({
         where: { channel_id: channelId, user_id: req.user.id },
       });
       if (!member) return res.status(403).json({ error: 'Not a channel member' });
+
+      const includeOpts = [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }];
+
+      if (req.query.around) {
+        const messages = await loadAround({ channel_id: channelId }, includeOpts);
+        return res.json({ messages: messages.map(serializeChannelMessage) });
+      }
 
       const where = { channel_id: channelId };
       if (req.query.before) {
@@ -86,7 +134,7 @@ router.get('/', async (req, res, next) => {
       }
       const messages = await Message.findAll({
         where,
-        include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
+        include: includeOpts,
         order: [['created_at', 'DESC'], ['id', 'DESC']],
         limit,
       });
@@ -97,6 +145,11 @@ router.get('/', async (req, res, next) => {
         where: { conversation_id: conversationId, user_id: req.user.id },
       });
       if (!participant) return res.status(403).json({ error: 'Not a conversation participant' });
+
+      if (req.query.around) {
+        const messages = await loadAround({ conversation_id: conversationId }, []);
+        return res.json({ messages: messages.map(serializeConversationMessage) });
+      }
 
       const where = { conversation_id: conversationId };
       if (req.query.before) {
@@ -120,8 +173,8 @@ router.post('/', async (req, res, next) => {
     if ((channelId && conversationId) || (!channelId && !conversationId)) {
       return res.status(400).json({ error: 'Provide exactly one of channelId or conversationId' });
     }
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
+    if ((!content || (typeof content === 'string' && content.trim().length === 0)) && (!attachments || attachments.length === 0)) {
+      return res.status(400).json({ error: 'content or attachments required' });
     }
     if (attachments && attachments.length > 4) {
       return res.status(400).json({ error: 'Too many attachments. Limit is 4' });
@@ -185,8 +238,8 @@ router.post('/', async (req, res, next) => {
 router.patch('/:messageId', async (req, res, next) => {
   try {
     const { content, attachments } = req.body;
-    if (typeof content !== 'string' || content.length === 0) {
-      return res.status(400).json({ error: 'content is required' });
+    if ((!content || (typeof content === 'string' && content.trim().length === 0)) && (!attachments || attachments.length === 0)) {
+      return res.status(400).json({ error: 'content or attachments required' });
     }
     if (attachments && attachments.length > 4) {
       return res.status(400).json({ error: 'Too many attachments. Limit is 4' });
