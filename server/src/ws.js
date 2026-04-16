@@ -134,7 +134,7 @@ function withUserPresenceLock(userId, fn) {
     }
     
   GET conns:[connId]
-  SET conns:[connId] 1 EX 60
+  SET conns:[connId] 1 EX 120
   Only care about existence - expiration needed so connections associated with downed server eventually disappear
 */
 
@@ -463,7 +463,7 @@ const configureWSServer = (wss) => {
 
     ws.on('pong', async () => {
       try {
-        await redisClient.set(`conns:${connId}`, 1, { EX: 60 });
+        await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
       }
       catch (err) {
         console.log(err);
