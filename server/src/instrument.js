@@ -6,9 +6,28 @@ const { NodeSDK } = require('@opentelemetry/sdk-node');
 const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node');
 const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
 
+// deployment.environment is set via OTEL_RESOURCE_ATTRIBUTES env var in .env
+// so the SDK picks it up automatically without a Resource import.
 const sdk = new NodeSDK({
   traceExporter: new OTLPTraceExporter(),
-  instrumentations: [getNodeAutoInstrumentations()],
+  instrumentations: [
+    getNodeAutoInstrumentations({
+      '@opentelemetry/instrumentation-http': {
+        // Skip high-volume, low-value incoming requests:
+        // - GET / : HAProxy health checks (4 nodes × 2 workers × every 5s)
+        // - /uploads/*: static image/asset serving
+        ignoreIncomingRequestHook: (req) =>
+          req.url === '/' || req.url?.startsWith('/uploads/') || false,
+      },
+      // Disable instrumentations that generate noisy, low-value spans:
+      // fs: spans for every require() and file read
+      // dns: DNS lookups (resolved once then OS-cached)
+      // net: raw TCP connection spans (redundant with http/pg/redis spans)
+      '@opentelemetry/instrumentation-fs': { enabled: false },
+      '@opentelemetry/instrumentation-dns': { enabled: false },
+      '@opentelemetry/instrumentation-net': { enabled: false },
+    }),
+  ],
 });
 
 sdk.start();
