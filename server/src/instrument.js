@@ -26,6 +26,8 @@ const sdk = new NodeSDK({
       '@opentelemetry/instrumentation-fs': { enabled: false },
       '@opentelemetry/instrumentation-dns': { enabled: false },
       '@opentelemetry/instrumentation-net': { enabled: false },
+      '@opentelemetry/instrumentation-redis': { enabled: false },
+      '@opentelemetry/instrumentation-ioredis': { enabled: false },
     }),
   ],
 });
