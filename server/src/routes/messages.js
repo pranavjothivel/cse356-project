@@ -7,6 +7,7 @@ const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { buildMessageCursor } = require('../util/messageCursor');
 const { minioClient, BUCKET } = require('../upload');
+const redisClient = require('../redis');
 
 const router = Router();
 
@@ -46,20 +47,42 @@ function serializeConversationMessage(m) {
   };
 }
 
+const MEMBER_CACHE_TTL = 60; // seconds
+
 async function getChannelMemberIds(channelId) {
+  const cacheKey = `channel:${channelId}:members`;
+  const cached = await redisClient.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const members = await ChannelMember.findAll({
     where: { channel_id: channelId },
     attributes: ['user_id'],
   });
-  return members.map(m => m.user_id);
+  const ids = members.map(m => m.user_id);
+  await redisClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
+  return ids;
+}
+
+async function invalidateChannelMemberCache(channelId) {
+  await redisClient.del(`channel:${channelId}:members`);
 }
 
 async function getConversationParticipantIds(conversationId) {
+  const cacheKey = `conv:${conversationId}:members`;
+  const cached = await redisClient.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const parts = await ConversationParticipant.findAll({
     where: { conversation_id: conversationId },
     attributes: ['user_id'],
   });
-  return parts.map(p => p.user_id);
+  const ids = parts.map(p => p.user_id);
+  await redisClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
+  return ids;
+}
+
+async function invalidateConversationMemberCache(conversationId) {
+  await redisClient.del(`conv:${conversationId}:members`);
 }
 
 // GET /api/messages?channelId=X[&before=Y&around=Y&limit=N]
@@ -192,20 +215,26 @@ router.post('/', async (req, res, next) => {
         content,
         ...(attachments ? { attachments } : {}),
       });
-      const full = await Message.findByPk(msg.id, {
-        include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
-      });
-      const memberIds = await getChannelMemberIds(channelId);
-      broadcastToUsers(memberIds, {
-        type: 'channel.message.created',
-        channelId,
-        message: serializeChannelMessage(full),
-      });
-      const otherMemberIds = memberIds.filter(id => id !== req.user.id);
-      if (otherMemberIds.length > 0) {
-        broadcastToUsers(otherMemberIds, { type: 'channel.unread', channelId });
-      }
-      return res.status(201).json(serializeChannelMessage(full));
+      // Attach author from session instead of re-fetching from DB
+      msg.author = { id: req.user.id, username: req.user.username, display_name: req.user.display_name };
+      const serialized = serializeChannelMessage(msg);
+
+      // Respond immediately, then broadcast asynchronously
+      res.status(201).json(serialized);
+
+      // Fire-and-forget: broadcast to other users via WebSocket
+      getChannelMemberIds(channelId).then(memberIds => {
+        broadcastToUsers(memberIds, {
+          type: 'channel.message.created',
+          channelId,
+          message: serialized,
+        });
+        const otherMemberIds = memberIds.filter(id => id !== req.user.id);
+        if (otherMemberIds.length > 0) {
+          broadcastToUsers(otherMemberIds, { type: 'channel.unread', channelId });
+        }
+      }).catch(err => console.error('Broadcast error (channel):', err));
+      return;
     } else {
       const participant = await ConversationParticipant.findOne({
         where: { conversation_id: conversationId, user_id: req.user.id },
@@ -218,18 +247,25 @@ router.post('/', async (req, res, next) => {
         content,
         ...(attachments ? { attachments } : {}),
       });
-      // Un-hide for any participant who had hidden the convo
-      await ConversationParticipant.update(
-        { hidden_at: null },
-        { where: { conversation_id: conversationId, hidden_at: { [Op.ne]: null } } }
-      );
-      const participantIds = await getConversationParticipantIds(conversationId);
-      broadcastToUsers(participantIds, {
-        type: 'message.created',
-        conversationId,
-        message: serializeConversationMessage(msg),
-      });
-      return res.status(201).json(serializeConversationMessage(msg));
+      const serialized = serializeConversationMessage(msg);
+
+      // Respond immediately, then broadcast asynchronously
+      res.status(201).json(serialized);
+
+      // Fire-and-forget: un-hide + broadcast
+      (async () => {
+        await ConversationParticipant.update(
+          { hidden_at: null },
+          { where: { conversation_id: conversationId, hidden_at: { [Op.ne]: null } } }
+        );
+        const participantIds = await getConversationParticipantIds(conversationId);
+        broadcastToUsers(participantIds, {
+          type: 'message.created',
+          conversationId,
+          message: serialized,
+        });
+      })().catch(err => console.error('Broadcast error (conversation):', err));
+      return;
     }
   } catch (err) { next(err); }
 });
@@ -364,3 +400,5 @@ router.delete('/:messageId', async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.invalidateChannelMemberCache = invalidateChannelMemberCache;
+module.exports.invalidateConversationMemberCache = invalidateConversationMemberCache;

@@ -4,6 +4,7 @@ const sequelize = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');
+const { invalidateChannelMemberCache } = require('./messages');
 
 const router = Router();
 
@@ -201,6 +202,7 @@ router.post('/:communityId/join', async (req, res, next) => {
         if (enrolled !== publicChannels.length) {
           throw new Error('channel_enrollment_failed');
         }
+        await Promise.all(publicChannels.map(c => invalidateChannelMemberCache(c.id)));
       }
     });
 
@@ -231,6 +233,7 @@ router.post('/:communityId/leave', async (req, res, next) => {
       await ChannelMember.destroy({
         where: { channel_id: channels.map(c => c.id), user_id: req.user.id },
       });
+      await Promise.all(channels.map(c => invalidateChannelMemberCache(c.id)));
     }
 
     await membership.destroy();

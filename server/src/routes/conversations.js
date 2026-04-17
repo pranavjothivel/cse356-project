@@ -8,6 +8,7 @@ const User = require('../models/User');
 const { Channel, ChannelMember } = require('../models');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
+const { invalidateConversationMemberCache } = require('./messages');
 
 // Matches a canonical UUID v1-v5. Used to guard :id params so literal path
 // segments like "unread" don't reach Sequelize as UUID query values and
@@ -322,6 +323,7 @@ router.post('/:id/participants', requireAuth, requireMember, async (req, res, ne
       conversation_id: req.conversation.id,
       user_id: target.id,
     });
+    await invalidateConversationMemberCache(req.conversation.id);
 
     const parts = await listParticipants(req.conversation.id);
     broadcastToUsers(parts.map(p => p.userId), {
@@ -346,6 +348,7 @@ router.delete('/:id/participants/me', requireAuth, requireMember, async (req, re
         where: { conversation_id: req.conversation.id, user_id: req.user.id },
         transaction: t,
       });
+      await invalidateConversationMemberCache(req.conversation.id);
       const remaining = await ConversationParticipant.count({
         where: { conversation_id: req.conversation.id },
         transaction: t,
