@@ -345,7 +345,11 @@ jobs:
 
   deploy-lb-configs:
     name: Deploy LB configs (HAProxy + Nginx)
-    needs: setup
+    # Must run after deploy-node to avoid a race: if HAProxy config is reloaded
+    # while a node is drained (drain state is runtime-only, not in the config file),
+    # the reload resets all servers to ready and sends traffic to a node mid-deploy.
+    needs: [setup, deploy-node]
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
