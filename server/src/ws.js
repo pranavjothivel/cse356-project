@@ -134,7 +134,7 @@ function withUserPresenceLock(userId, fn) {
     }
     
   GET conns:[connId]
-  SET conns:[connId] 1 EX 120
+  SET conns:[connId] 1 EX 60
   Only care about existence - expiration needed so connections associated with downed server eventually disappear
 */
 
@@ -157,33 +157,6 @@ const users = new Map();
 const connections = new Map();
 
 
-/**
- * Pings all local connections whose ids start with firstCharInId
- * 
- * Used to spread pings equally over the interval to reduce any potential load from pong writes
- */
-function pingLocalConnections(firstCharInId) {
-  let time1 = Date.now();
-  let connectionsArray = [...connections];
-  for (let i = 0; i < connectionsArray.length; i++) {
-    if (connectionsArray[i][0][0] !== firstCharInId) continue;
-    
-    let ws;
-    try { ws = connectionsArray[i][1].ws; } catch (e) {}
-    if (!ws) continue;
-
-    try {
-      ws.ping();
-    }
-    catch (e) {ws.close();}
-  }
-
-  let time2 = Date.now();
-  console.log(`Pinged local connections starting with ${firstCharInId} in ${time2-time1}ms`);
-}
-let idChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
-for (let i = 0; i <= 15; i++)
-  setTimeout(() => {setInterval(pingLocalConnections, 60000, idChars[i])}, 3750*i);
 
 
 /**
@@ -461,15 +434,7 @@ const configureWSServer = (wss) => {
       }
     });
 
-    ws.on('pong', async () => {
-      try {
-        await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
-      }
-      catch (err) {
-        console.log(err);
-        ws.close();
-      }
-    });
+
 
     ws.on('close', async () => {
       if (!id) return; // init failed, nothing to clean up
@@ -519,7 +484,7 @@ const configureWSServer = (wss) => {
           }
         }
 
-        console.log(`${id} disconnected on connId ${connId}`);
+        console.log('Client disconnected');
       }
       catch (err) {
         try { await release() } catch (e) { console.log(e); }
@@ -599,8 +564,6 @@ const configureWSServer = (wss) => {
         else conns[connId] = ws;
         connections.set(connId, { userId: id, ws });
 
-        await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
-
         await initRelease();
       }
       catch (err) {
@@ -628,7 +591,7 @@ const configureWSServer = (wss) => {
         broadcastPresenceChange(id, 'online');
       }
 
-      console.log(`${id} connected on connId ${connId}`);
+      console.log('Client connected');
     }
     catch (err) {
       console.log(err);
