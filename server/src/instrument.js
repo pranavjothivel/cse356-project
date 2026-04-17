@@ -28,6 +28,8 @@ const sdk = new NodeSDK({
       '@opentelemetry/instrumentation-net': { enabled: false },
       '@opentelemetry/instrumentation-redis': { enabled: false },
       '@opentelemetry/instrumentation-ioredis': { enabled: false },
+      '@opentelemetry/instrumentation-pg': { enabled: false },
+      '@opentelemetry/instrumentation-generic-pool': { enabled: false },
     }),
   ],
 });
