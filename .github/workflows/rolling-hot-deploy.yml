@@ -160,6 +160,7 @@ jobs:
 
       - name: PM2 status check
         id: pm2check
+        if: always()
         run: |
           echo "PM2 status on $NODE_NAME:"
           pm2_status=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"')
@@ -172,13 +173,13 @@ jobs:
           fi
 
       - name: Rollback
-        if: ${{ matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
+        if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
         run: |
           echo "::error::PM2 errored on $NODE_NAME — rolling back"
           rsync -az --delete --exclude='node_modules/' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             /tmp/app-backup/ deploy@$NODE_IP:/srv/app/
-          $SSH deploy@$NODE_IP 'pm2 reload ecosystem.config.js --update-env'
+          $SSH deploy@$NODE_IP 'pm2 restart cse356'
 
       - name: Re-enable in HAProxy
         if: always()
@@ -188,7 +189,7 @@ jobs:
             "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"
 
       - name: Fail if PM2 errored
-        if: ${{ steps.pm2check.outputs.has_error == 'true' }}
+        if: ${{ always() && steps.pm2check.outputs.has_error == 'true' }}
         run: exit 1
 
       - name: Configure PgBouncer
