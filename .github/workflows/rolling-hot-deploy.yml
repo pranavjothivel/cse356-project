@@ -125,6 +125,12 @@ jobs:
 
       - name: Install deps and reload PM2
         run: |
+          # Record error log offset before reload so the PM2 status check only
+          # shows lines written by the new process, not leftover history.
+          $SSH deploy@$NODE_IP \
+            'wc -c < ~/.pm2/logs/cse356-error.log 2>/dev/null || echo 0' \
+            > /tmp/pm2-err-offset
+
           $SSH deploy@$NODE_IP bash <<'REMOTE'
             set -euo pipefail
             export PATH="$PATH:/usr/local/bin"
@@ -164,7 +170,10 @@ jobs:
         run: |
           echo "PM2 status on $NODE_NAME:"
           $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
-          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
+          offset=$(cat /tmp/pm2-err-offset)
+          echo "--- error log since reload (offset $offset) ---"
+          $SSH root@$NODE_IP \
+            "tail -c +$(( offset + 1 )) /root/.pm2/logs/cse356-error.log 2>/dev/null || true"
 
           # Parse via jq on the runner (guaranteed available) rather than on the node.
           # Checks: at least one cse356 instance exists AND all are "online".
@@ -212,7 +221,10 @@ jobs:
         run: |
           echo "PM2 status on $NODE_NAME after rollback:"
           $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
-          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
+          offset=$(cat /tmp/pm2-err-offset)
+          echo "--- error log since reload (offset $offset) ---"
+          $SSH root@$NODE_IP \
+            "tail -c +$(( offset + 1 )) /root/.pm2/logs/cse356-error.log 2>/dev/null || true"
 
           # Same logic as the main PM2 check — all instances must be "online".
           # "launching" is a failure here too: the post-rollback health check already
