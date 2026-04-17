@@ -154,9 +154,10 @@ jobs:
           REMOTE
 
             # --- 5. HTTP health check before re-enabling ---
+            # curl runs on the node itself (port 3000 is not publicly reachable)
             echo "Health-checking $name..."
             for attempt in $(seq 1 15); do
-              if curl -sf --max-time 3 "http://$ip:3000/" > /dev/null 2>&1; then
+              if $SSH deploy@$ip 'curl -sf --max-time 3 http://localhost:3000/' > /dev/null 2>&1; then
                 echo "Health check passed on attempt $attempt"
                 break
               fi
