@@ -5,12 +5,10 @@ require('dotenv').config();
 const { NodeSDK } = require('@opentelemetry/sdk-node');
 const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node');
 const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
-const { Resource } = require('@opentelemetry/resources');
 
+// deployment.environment is set via OTEL_RESOURCE_ATTRIBUTES env var in .env
+// so the SDK picks it up automatically without a Resource import.
 const sdk = new NodeSDK({
-  resource: new Resource({
-    'deployment.environment': process.env.NODE_ENV || 'development',
-  }),
   traceExporter: new OTLPTraceExporter(),
   instrumentations: [
     getNodeAutoInstrumentations({
