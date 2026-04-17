@@ -233,13 +233,6 @@ jobs:
           $SSH root@$LB \
             "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"
 
-      - name: Abort — deployed ref did not start cleanly
-        if: ${{ always() && steps.pm2check.outputs.has_error == 'true' }}
-        run: |
-          echo "::error::Deploy of branch '${{ github.ref_name }}' @ ${GITHUB_SHA:0:7} failed on $NODE_NAME — PM2 did not reach a healthy state."
-          echo "::error::A rollback to the previous snapshot has been applied. Investigate the ref before re-deploying."
-          exit 1
-
       - name: Configure PgBouncer
         if: always()
         run: |
@@ -267,6 +260,13 @@ jobs:
 
             systemctl reload pgbouncer || systemctl restart pgbouncer
           PGBOUNCER
+
+      - name: "[WARNING] Deploy failed — rollback applied"
+        if: ${{ always() && steps.pm2check.outputs.has_error == 'true' }}
+        run: |
+          echo "::error::Deploy of branch '${{ github.ref_name }}' @ ${GITHUB_SHA:0:7} failed on $NODE_NAME — PM2 did not reach a healthy state."
+          echo "::error::A rollback to the previous snapshot has been applied. Investigate the ref before re-deploying."
+          exit 1
 
   deploy-jobs:
     name: Deploy cron jobs (telemetry)
