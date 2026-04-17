@@ -1,3 +1,4 @@
+process.exit(1); // TEST: deliberate crash to trigger PM2 rollback [DO NOT MERGE]
 require('./instrument');
 require('dotenv').config();
 const { trace, SpanStatusCode } = require('@opentelemetry/api');
