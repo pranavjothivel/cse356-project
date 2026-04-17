@@ -82,17 +82,37 @@ jobs:
             echo "Waiting ${DRAIN_WAIT}s for in-flight requests to complete..."
             sleep "$DRAIN_WAIT"
 
-            # --- 2. Deploy application code ---
+            # --- 2. Snapshot node[0] on the runner for rollback ---
+            if [ "$i" -eq 0 ]; then
+              echo "Snapshotting $name → runner for rollback..."
+              mkdir -p /tmp/app-backup
+              rsync -az --exclude='node_modules/' \
+                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+                deploy@$ip:/srv/app/ /tmp/app-backup/
+            fi
+
+            # --- 3. Deploy application code ---
             echo "Syncing code to $name..."
             printf '%s' "$ENV_FILE" | $SSH deploy@$ip "mkdir -p /srv/app && cat > /srv/app/.env"
 
-            rsync -az --delete \
-              --exclude='.env' \
-              --exclude='node_modules/' \
-              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-              ./server/ deploy@$ip:/srv/app/
+            rsync_once() {
+              rsync -az --delete \
+                --exclude='.env' \
+                --exclude='node_modules/' \
+                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+                ./server/ deploy@$1:/srv/app/
+            }
+            if ! rsync_once "$ip"; then
+              if [ "$ip" = "130.245.136.239" ]; then
+                echo "rsync failed for node-03, retrying once..."
+                sleep 3
+                rsync_once "$ip"
+              else
+                exit 1
+              fi
+            fi
 
-            # --- 3. Install deps and reload PM2 ---
+            # --- 4. Install deps and reload PM2 ---
             echo "Installing deps and reloading PM2 on $name..."
             $SSH deploy@$ip bash <<'REMOTE'
               set -euo pipefail
@@ -112,7 +132,7 @@ jobs:
               pm2 save
           REMOTE
 
-            # --- 4. Health check before re-enabling ---
+            # --- 5. HTTP health check before re-enabling ---
             echo "Health-checking $name..."
             for attempt in $(seq 1 15); do
               if curl -sf --max-time 3 "http://$ip:3000/" > /dev/null 2>&1; then
@@ -121,7 +141,6 @@ jobs:
               fi
               if [ "$attempt" -eq 15 ]; then
                 echo "::error::Health check failed for $name ($ip) after 15 attempts"
-                # Re-enable the node anyway so we don't leave it drained, but fail the workflow
                 $SSH root@$LB \
                   "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
                 exit 1
@@ -129,7 +148,24 @@ jobs:
               sleep 2
             done
 
-            # --- 5. Re-enable node in HAProxy ---
+            # --- 6. PM2 status check; rollback on node[0] if errored ---
+            echo "PM2 status on $name:"
+            pm2_status=$($SSH root@$ip 'su -s /bin/bash deploy -c "pm2 list"')
+            echo "$pm2_status"
+            $SSH root@$ip 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
+
+            if [ "$i" -eq 0 ] && echo "$pm2_status" | grep -q "errored"; then
+              echo "::error::PM2 instances errored on $name — rolling back"
+              rsync -az --delete --exclude='node_modules/' \
+                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+                /tmp/app-backup/ deploy@$ip:/srv/app/
+              $SSH deploy@$ip 'pm2 reload ecosystem.config.js --update-env'
+              $SSH root@$LB \
+                "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
+              exit 1
+            fi
+
+            # --- 7. Re-enable node in HAProxy ---
             echo "Re-enabling $ha_server in HAProxy..."
             $SSH root@$LB \
               "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
