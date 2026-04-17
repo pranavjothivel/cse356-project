@@ -1,0 +1,282 @@
+name: Rolling Hot Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for deploy'
+        required: false
+        default: 'manual rolling deploy'
+      drain_wait:
+        description: 'Seconds to wait after draining a node (for in-flight requests to finish)'
+        required: false
+        default: '10'
+
+jobs:
+  setup:
+    name: Read infra config
+    runs-on: ubuntu-latest
+    outputs:
+      nodes: ${{ steps.nodes.outputs.nodes }}
+      lb: ${{ steps.nodes.outputs.lb }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Parse nodes
+        id: nodes
+        run: |
+          nodes=$(yq -o=json '.app_nodes' infra/nodes.yml | tr -d '\n')
+          lb=$(yq '.lb_node' infra/nodes.yml)
+          echo "nodes=$nodes" >> "$GITHUB_OUTPUT"
+          echo "lb=$lb"       >> "$GITHUB_OUTPUT"
+
+  rolling-deploy:
+    name: Rolling deploy across app nodes
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      LB: ${{ needs.setup.outputs.lb }}
+      DRAIN_WAIT: ${{ inputs.drain_wait }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Rolling deploy
+        env:
+          NODES_JSON: ${{ needs.setup.outputs.nodes }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+        run: |
+          set -euo pipefail
+
+          node_count=$(echo "$NODES_JSON" | jq length)
+
+          for i in $(seq 0 $(( node_count - 1 ))); do
+            name=$(echo "$NODES_JSON" | jq -r ".[$i].name")
+            ip=$(echo "$NODES_JSON" | jq -r ".[$i].ip")
+
+            # HAProxy server names are node1, node2, ... (1-indexed)
+            ha_server="node$(( i + 1 ))"
+
+            echo "=========================================="
+            echo "Deploying to $name ($ip) — HAProxy server: $ha_server"
+            echo "=========================================="
+
+            # --- 1. Drain node from HAProxy (stop sending new connections) ---
+            echo "Draining $ha_server from HAProxy..."
+            $SSH root@$LB \
+              "echo 'set server app_servers/$ha_server state drain' | socat stdio /run/haproxy/admin.sock"
+
+            echo "Waiting ${DRAIN_WAIT}s for in-flight requests to complete..."
+            sleep "$DRAIN_WAIT"
+
+            # --- 2. Deploy application code ---
+            echo "Syncing code to $name..."
+            printf '%s' "$ENV_FILE" | $SSH deploy@$ip "mkdir -p /srv/app && cat > /srv/app/.env"
+
+            rsync -az --delete \
+              --exclude='.env' \
+              --exclude='node_modules/' \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+              ./server/ deploy@$ip:/srv/app/
+
+            # --- 3. Install deps and reload PM2 ---
+            echo "Installing deps and reloading PM2 on $name..."
+            $SSH deploy@$ip bash <<'REMOTE'
+              set -euo pipefail
+              export PATH="$PATH:/usr/local/bin"
+              cd /srv/app
+              mkdir -p /srv/app/uploads
+              npm install --omit=dev --prefer-offline
+              if pm2 describe cse356 > /dev/null 2>&1; then
+                pm2 reload ecosystem.config.js --update-env
+              else
+                pm2 start ecosystem.config.js
+              fi
+              _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
+                || { echo "$_out" | grep -q "Nothing to do" \
+                  && echo "pm2: already at $(nproc) instances, skipping scale" \
+                  || { echo "$_out" >&2; exit 1; }; }
+              pm2 save
+          REMOTE
+
+            # --- 4. Health check before re-enabling ---
+            echo "Health-checking $name..."
+            for attempt in $(seq 1 15); do
+              if curl -sf --max-time 3 "http://$ip:3000/" > /dev/null 2>&1; then
+                echo "Health check passed on attempt $attempt"
+                break
+              fi
+              if [ "$attempt" -eq 15 ]; then
+                echo "::error::Health check failed for $name ($ip) after 15 attempts"
+                # Re-enable the node anyway so we don't leave it drained, but fail the workflow
+                $SSH root@$LB \
+                  "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
+                exit 1
+              fi
+              sleep 2
+            done
+
+            # --- 5. Re-enable node in HAProxy ---
+            echo "Re-enabling $ha_server in HAProxy..."
+            $SSH root@$LB \
+              "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
+
+            echo "$name deployed successfully."
+            echo ""
+          done
+
+          echo "All nodes deployed."
+
+      - name: Configure PgBouncer on all nodes
+        env:
+          NODES_JSON: ${{ needs.setup.outputs.nodes }}
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+        run: |
+          set -euo pipefail
+          node_count=$(echo "$NODES_JSON" | jq length)
+
+          for i in $(seq 0 $(( node_count - 1 ))); do
+            name=$(echo "$NODES_JSON" | jq -r ".[$i].name")
+            ip=$(echo "$NODES_JSON" | jq -r ".[$i].ip")
+
+            echo "Configuring PgBouncer on $name..."
+
+            $SSH deploy@$ip "mkdir -p /srv/app/infra/pgbouncer"
+            rsync -az \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+              ./infra/pgbouncer/ deploy@$ip:/srv/app/infra/pgbouncer/
+
+            $SSH root@$ip bash <<'PGBOUNCER'
+              set -euo pipefail
+              source /srv/app/.env
+              PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+              PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+              PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+              PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+              sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                  -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                  /srv/app/infra/pgbouncer/pgbouncer.ini \
+                  > /etc/pgbouncer/pgbouncer.ini
+
+              echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
+              chmod 640 /etc/pgbouncer/userlist.txt
+              chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+              systemctl reload pgbouncer || systemctl restart pgbouncer
+          PGBOUNCER
+          done
+
+  deploy-frontend:
+    name: Deploy frontend to LB
+    needs: [setup, rolling-deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if frontend exists
+        id: fe
+        run: |
+          [ -f client/package.json ] && echo "exists=true" >> "$GITHUB_OUTPUT" \
+            || echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        if: steps.fe.outputs.exists == 'true'
+        working-directory: client
+        env:
+          VITE_BACKEND_URL: https://group1.cse356.compas.cs.stonybrook.edu/api
+          VITE_WS_URL: wss://group1.cse356.compas.cs.stonybrook.edu/api
+          VITE_IMAGE_URL: https://group1.cse356.compas.cs.stonybrook.edu/minio/images
+        run: npm ci && npm run build
+
+      - name: Set up SSH key
+        if: steps.fe.outputs.exists == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Deploy frontend to LB node
+        if: steps.fe.outputs.exists == 'true'
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
+
+      - name: Deploy Vector config to LB node
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          sed "s|\${AXIOM_TOKEN_LB}|${{ secrets.AXIOM_TOKEN_LB }}|g" \
+            infra/vector/vector.yaml \
+            | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+              root@${{ needs.setup.outputs.lb }} "cat > /etc/vector/vector.yaml"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} "systemctl reload-or-restart vector"
+
+  deploy-lb-configs:
+    name: Deploy LB configs (HAProxy + Nginx)
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for config changes
+        id: changes
+        run: |
+          git fetch origin main
+          base=$(git merge-base HEAD origin/main)
+          haproxy=$(git diff --name-only "$base" HEAD -- infra/haproxy/haproxy.cfg | wc -l)
+          nginx=$(git diff --name-only "$base" HEAD -- infra/nginx/ | wc -l)
+          echo "haproxy=$( [ "$haproxy" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          echo "nginx=$( [ "$nginx" -gt 0 ] && echo true || echo false )"     >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH key
+        if: steps.changes.outputs.haproxy == 'true' || steps.changes.outputs.nginx == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Push HAProxy config
+        if: steps.changes.outputs.haproxy == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            infra/haproxy/haproxy.cfg \
+            root@${{ needs.setup.outputs.lb }}:/etc/haproxy/haproxy.cfg
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} \
+            "haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy"
+
+      - name: Push Nginx config
+        if: steps.changes.outputs.nginx == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            infra/nginx/nginx.conf \
+            root@${{ needs.setup.outputs.lb }}:/etc/nginx/nginx.conf
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            infra/nginx/sites-enabled/ \
+            root@${{ needs.setup.outputs.lb }}:/etc/nginx/sites-enabled/
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@${{ needs.setup.outputs.lb }} \
+            "nginx -t && systemctl reload nginx"

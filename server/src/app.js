@@ -110,6 +110,18 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Attach request-level span attributes not covered by auto-instrumentation:
+// - http.client_ip: real client IP via req.ip (respects trust proxy / HAProxy X-Forwarded-For)
+// - enduser.id: authenticated user ID or username
+app.use((req, res, next) => {
+  const span = require('@opentelemetry/api').trace.getActiveSpan();
+  if (span) {
+    if (req.ip) span.setAttribute('http.client_ip', req.ip);
+    if (req.user) span.setAttribute('enduser.id', String(req.user.id ?? req.user.username ?? ''));
+  }
+  next();
+});
+
 // ──────────────────────────────────────────────
 // Routes
 // ──────────────────────────────────────────────
