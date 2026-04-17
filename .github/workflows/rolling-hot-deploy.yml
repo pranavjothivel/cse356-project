@@ -163,13 +163,22 @@ jobs:
         if: always()
         run: |
           echo "PM2 status on $NODE_NAME:"
-          pm2_status=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"')
-          echo "$pm2_status"
+          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
           $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
-          if echo "$pm2_status" | grep -q "errored"; then
-            echo "has_error=true" >> "$GITHUB_OUTPUT"
-          else
+
+          # Parse via jq on the runner (guaranteed available) rather than on the node.
+          # Checks: at least one cse356 instance exists AND all are "online".
+          # "launching" is intentionally treated as a failure — by the time this step
+          # runs the health check has already passed, so all instances must have
+          # settled. A "launching" here means something restarted unexpectedly.
+          pm2_json=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 jlist"')
+          if echo "$pm2_json" | jq -e '
+            [.[] | select(.name == "cse356")] | length > 0
+            and all(.pm2_env.status == "online")
+          ' > /dev/null; then
             echo "has_error=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_error=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Rollback
@@ -202,11 +211,18 @@ jobs:
         if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
         run: |
           echo "PM2 status on $NODE_NAME after rollback:"
-          pm2_status=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"')
-          echo "$pm2_status"
+          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
           $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
-          if echo "$pm2_status" | grep -q "errored"; then
-            echo "::error::PM2 still errored on $NODE_NAME after rollback"
+
+          # Same logic as the main PM2 check — all instances must be "online".
+          # "launching" is a failure here too: the post-rollback health check already
+          # ran and confirmed the app is (or isn't) serving, so instances must have settled.
+          pm2_json=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 jlist"')
+          if ! echo "$pm2_json" | jq -e '
+            [.[] | select(.name == "cse356")] | length > 0
+            and all(.pm2_env.status == "online")
+          ' > /dev/null; then
+            echo "::error::PM2 still not fully online on $NODE_NAME after rollback"
             exit 1
           fi
 
