@@ -13,11 +13,19 @@ const sdk = new NodeSDK({
   instrumentations: [
     getNodeAutoInstrumentations({
       '@opentelemetry/instrumentation-http': {
-        // Skip span creation for static file requests — image/asset serving
-        // produces high-volume, low-value traces with no auth context.
+        // Skip high-volume, low-value incoming requests:
+        // - GET / : HAProxy health checks (4 nodes × 2 workers × every 5s)
+        // - /uploads/*: static image/asset serving
         ignoreIncomingRequestHook: (req) =>
-          req.url?.startsWith('/uploads/') ?? false,
+          req.url === '/' || req.url?.startsWith('/uploads/') || false,
       },
+      // Disable instrumentations that generate noisy, low-value spans:
+      // fs: spans for every require() and file read
+      // dns: DNS lookups (resolved once then OS-cached)
+      // net: raw TCP connection spans (redundant with http/pg/redis spans)
+      '@opentelemetry/instrumentation-fs': { enabled: false },
+      '@opentelemetry/instrumentation-dns': { enabled: false },
+      '@opentelemetry/instrumentation-net': { enabled: false },
     }),
   ],
 });
