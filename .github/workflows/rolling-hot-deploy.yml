@@ -23,6 +23,7 @@ jobs:
     outputs:
       nodes: ${{ steps.nodes.outputs.nodes }}
       lb: ${{ steps.nodes.outputs.lb }}
+      telemetry: ${{ steps.nodes.outputs.telemetry }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,8 +52,10 @@ jobs:
             nodes=$(echo "$nodes" | jq -c --argjson idx "$idx" '[.[$idx] | .is_first = true]')
           fi
 
-          echo "nodes=$nodes" >> "$GITHUB_OUTPUT"
-          echo "lb=$lb"       >> "$GITHUB_OUTPUT"
+          telemetry=$(yq '.telemetry_node' infra/nodes.yml)
+          echo "nodes=$nodes"         >> "$GITHUB_OUTPUT"
+          echo "lb=$lb"               >> "$GITHUB_OUTPUT"
+          echo "telemetry=$telemetry" >> "$GITHUB_OUTPUT"
 
   deploy-node:
     name: Deploy ${{ matrix.node.name }}
@@ -214,6 +217,45 @@ jobs:
 
             systemctl reload pgbouncer || systemctl restart pgbouncer
           PGBOUNCER
+
+  deploy-jobs:
+    name: Deploy cron jobs (telemetry)
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      TELEMETRY: ${{ needs.setup.outputs.telemetry }}
+      SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Ensure /root/redis-cleanup exists
+        run: $SSH root@$TELEMETRY 'mkdir -p /root/redis-cleanup'
+
+      - name: Sync job files
+        run: |
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='node_modules/' \
+            --exclude='output.txt' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./jobs/redis-cleanup/ root@$TELEMETRY:/root/redis-cleanup/
+
+      - name: Push .env
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          grep '^REDIS_URL=' <(printf '%s' "$ENV_FILE") \
+            | $SSH root@$TELEMETRY 'cat > /root/redis-cleanup/.env'
+
+      - name: Install deps
+        run: $SSH root@$TELEMETRY 'cd /root/redis-cleanup && npm install --omit=dev --prefer-offline'
 
   deploy-frontend:
     name: Deploy frontend to LB
