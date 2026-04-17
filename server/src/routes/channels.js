@@ -3,6 +3,7 @@ const { Channel, ChannelMember, CommunityMember, Community, User } = require('..
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
+const { invalidateChannelMemberCache } = require('./messages');
 
 const router = Router();
 
@@ -112,6 +113,7 @@ router.post('/:channelId/invite', async (req, res, next) => {
     if (existing) return res.status(400).json({ error: 'Already a channel member' });
 
     await ChannelMember.create({ channel_id: channel.id, user_id: userId });
+    await invalidateChannelMemberCache(channel.id);
     res.json({ message: 'User now has access to this channel' });
   } catch (err) { next(err); }
 });
@@ -125,6 +127,7 @@ router.post('/:channelId/leave', async (req, res, next) => {
     if (!member) return res.status(400).json({ error: 'Not a channel member' });
 
     await member.destroy();
+    await invalidateChannelMemberCache(req.params.channelId);
     res.json({ message: 'Left channel' });
   } catch (err) { next(err); }
 });
