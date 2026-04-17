@@ -37,17 +37,39 @@ jobs:
         run: |
           nodes=$(yq -o=json '.app_nodes' infra/nodes.yml | tr -d '\n')
           lb=$(yq '.lb_node' infra/nodes.yml)
+
+          # Annotate each node with its HAProxy server name and whether it is first
+          nodes=$(echo "$nodes" | jq '[to_entries[] | .value + {
+            ha_server: ("node" + ((.key + 1) | tostring)),
+            is_first:  (.key == 0)
+          }]')
+
+          # Filter to a single node when target_node is specified
+          target="${{ inputs.target_node }}"
+          if [ -n "$target" ]; then
+            idx=$(( target - 1 ))
+            nodes=$(echo "$nodes" | jq --argjson idx "$idx" '[.[$idx] | .is_first = true]')
+          fi
+
           echo "nodes=$nodes" >> "$GITHUB_OUTPUT"
           echo "lb=$lb"       >> "$GITHUB_OUTPUT"
 
-  rolling-deploy:
-    name: Rolling deploy across app nodes
+  deploy-node:
+    name: Deploy ${{ matrix.node.name }}
     needs: setup
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        node: ${{ fromJSON(needs.setup.outputs.nodes) }}
     env:
       LB: ${{ needs.setup.outputs.lb }}
       DRAIN_WAIT: ${{ inputs.drain_wait }}
-      TARGET_NODE: ${{ inputs.target_node }}
+      NODE_NAME: ${{ matrix.node.name }}
+      NODE_IP: ${{ matrix.node.ip }}
+      HA_SERVER: ${{ matrix.node.ha_server }}
+      SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
     steps:
       - uses: actions/checkout@v4
 
@@ -58,189 +80,144 @@ jobs:
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Rolling deploy
-        env:
-          NODES_JSON: ${{ needs.setup.outputs.nodes }}
-          ENV_FILE: ${{ secrets.ENV_FILE }}
-          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+      - name: Drain from HAProxy
         run: |
-          set -euo pipefail
+          echo "Draining $HA_SERVER from HAProxy..."
+          $SSH root@$LB \
+            "echo 'set server app_servers/$HA_SERVER state drain' | socat stdio /run/haproxy/admin.sock"
+          echo "Waiting ${DRAIN_WAIT}s for in-flight requests..."
+          sleep "$DRAIN_WAIT"
 
-          node_count=$(echo "$NODES_JSON" | jq length)
-          nodes_deployed=0
+      - name: Snapshot for rollback
+        if: ${{ matrix.node.is_first }}
+        run: |
+          echo "Snapshotting $NODE_NAME → runner for rollback..."
+          mkdir -p /tmp/app-backup
+          rsync -az --exclude='node_modules/' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            deploy@$NODE_IP:/srv/app/ /tmp/app-backup/
 
-          for i in $(seq 0 $(( node_count - 1 ))); do
-            name=$(echo "$NODES_JSON" | jq -r ".[$i].name")
-            ip=$(echo "$NODES_JSON" | jq -r ".[$i].ip")
+      - name: Sync code
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          echo "Syncing code to $NODE_NAME..."
+          printf '%s' "$ENV_FILE" | $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
 
-            # HAProxy server names are node1, node2, ... (1-indexed)
-            ha_server="node$(( i + 1 ))"
-
-            # Skip if a specific target node was requested
-            if [ -n "$TARGET_NODE" ] && [ "$(( i + 1 ))" != "$TARGET_NODE" ]; then
-              echo "Skipping $name (target_node=$TARGET_NODE)"
-              continue
-            fi
-
-            # Track whether this is the first node deployed in this run
-            # (used for snapshot + rollback logic — independent of absolute index)
-            if [ "$nodes_deployed" -eq 0 ]; then
-              first_in_run=true
+          rsync_once() {
+            rsync -az --delete \
+              --exclude='.env' --exclude='node_modules/' \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+              ./server/ deploy@$NODE_IP:/srv/app/
+          }
+          if ! rsync_once; then
+            if [ "$NODE_IP" = "130.245.136.239" ]; then
+              echo "rsync failed for node-03, retrying once..."
+              sleep 3
+              rsync_once
             else
-              first_in_run=false
-            fi
-            nodes_deployed=$(( nodes_deployed + 1 ))
-
-            echo "=========================================="
-            echo "Deploying to $name ($ip) — HAProxy server: $ha_server"
-            echo "=========================================="
-
-            # --- 1. Drain node from HAProxy (stop sending new connections) ---
-            echo "Draining $ha_server from HAProxy..."
-            $SSH root@$LB \
-              "echo 'set server app_servers/$ha_server state drain' | socat stdio /run/haproxy/admin.sock"
-
-            echo "Waiting ${DRAIN_WAIT}s for in-flight requests to complete..."
-            sleep "$DRAIN_WAIT"
-
-            # --- 2. Snapshot node[0] on the runner for rollback ---
-            if [ "$first_in_run" = "true" ]; then
-              echo "Snapshotting $name → runner for rollback..."
-              mkdir -p /tmp/app-backup
-              rsync -az --exclude='node_modules/' \
-                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-                deploy@$ip:/srv/app/ /tmp/app-backup/
-            fi
-
-            # --- 3. Deploy application code ---
-            echo "Syncing code to $name..."
-            printf '%s' "$ENV_FILE" | $SSH deploy@$ip "mkdir -p /srv/app && cat > /srv/app/.env"
-
-            rsync_once() {
-              rsync -az --delete \
-                --exclude='.env' \
-                --exclude='node_modules/' \
-                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-                ./server/ deploy@$1:/srv/app/
-            }
-            if ! rsync_once "$ip"; then
-              if [ "$ip" = "130.245.136.239" ]; then
-                echo "rsync failed for node-03, retrying once..."
-                sleep 3
-                rsync_once "$ip"
-              else
-                exit 1
-              fi
-            fi
-
-            # --- 4. Install deps and reload PM2 ---
-            echo "Installing deps and reloading PM2 on $name..."
-            $SSH deploy@$ip bash <<'REMOTE'
-              set -euo pipefail
-              export PATH="$PATH:/usr/local/bin"
-              cd /srv/app
-              mkdir -p /srv/app/uploads
-              npm install --omit=dev --prefer-offline
-              if pm2 describe cse356 > /dev/null 2>&1; then
-                pm2 reload ecosystem.config.js --update-env
-              else
-                pm2 start ecosystem.config.js
-              fi
-              _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
-                || { echo "$_out" | grep -q "Nothing to do" \
-                  && echo "pm2: already at $(nproc) instances, skipping scale" \
-                  || { echo "$_out" >&2; exit 1; }; }
-              pm2 save
-          REMOTE
-
-            # --- 5. HTTP health check before re-enabling ---
-            # curl runs on the node itself (port 3000 is not publicly reachable)
-            echo "Health-checking $name..."
-            for attempt in $(seq 1 15); do
-              if $SSH deploy@$ip 'curl -sf --max-time 3 http://localhost:3000/' > /dev/null 2>&1; then
-                echo "Health check passed on attempt $attempt"
-                break
-              fi
-              if [ "$attempt" -eq 15 ]; then
-                echo "::error::Health check failed for $name ($ip) after 15 attempts"
-                $SSH root@$LB \
-                  "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
-                exit 1
-              fi
-              sleep 2
-            done
-
-            # --- 6. PM2 status check; rollback on node[0] if errored ---
-            echo "PM2 status on $name:"
-            pm2_status=$($SSH root@$ip 'su -s /bin/bash deploy -c "pm2 list"')
-            echo "$pm2_status"
-            $SSH root@$ip 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
-
-            if [ "$first_in_run" = "true" ] && echo "$pm2_status" | grep -q "errored"; then
-              echo "::error::PM2 instances errored on $name — rolling back"
-              rsync -az --delete --exclude='node_modules/' \
-                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-                /tmp/app-backup/ deploy@$ip:/srv/app/
-              $SSH deploy@$ip 'pm2 reload ecosystem.config.js --update-env'
-              $SSH root@$LB \
-                "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
               exit 1
             fi
+          fi
 
-            # --- 7. Re-enable node in HAProxy ---
-            echo "Re-enabling $ha_server in HAProxy..."
-            $SSH root@$LB \
-              "echo 'set server app_servers/$ha_server state ready' | socat stdio /run/haproxy/admin.sock"
-
-            echo "$name deployed successfully."
-            echo ""
-          done
-
-          echo "All nodes deployed."
-
-      - name: Configure PgBouncer on all nodes
-        env:
-          NODES_JSON: ${{ needs.setup.outputs.nodes }}
-          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
+      - name: Install deps and reload PM2
         run: |
-          set -euo pipefail
-          node_count=$(echo "$NODES_JSON" | jq length)
+          $SSH deploy@$NODE_IP bash <<'REMOTE'
+            set -euo pipefail
+            export PATH="$PATH:/usr/local/bin"
+            cd /srv/app
+            mkdir -p /srv/app/uploads
+            npm install --omit=dev --prefer-offline
+            if pm2 describe cse356 > /dev/null 2>&1; then
+              pm2 reload ecosystem.config.js --update-env
+            else
+              pm2 start ecosystem.config.js
+            fi
+            _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
+              || { echo "$_out" | grep -q "Nothing to do" \
+                && echo "pm2: already at $(nproc) instances, skipping scale" \
+                || { echo "$_out" >&2; exit 1; }; }
+            pm2 save
+          REMOTE
 
-          for i in $(seq 0 $(( node_count - 1 ))); do
-            name=$(echo "$NODES_JSON" | jq -r ".[$i].name")
-            ip=$(echo "$NODES_JSON" | jq -r ".[$i].ip")
-
-            echo "Configuring PgBouncer on $name..."
-
-            $SSH deploy@$ip "mkdir -p /srv/app/infra/pgbouncer"
-            rsync -az \
-              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-              ./infra/pgbouncer/ deploy@$ip:/srv/app/infra/pgbouncer/
-
-            $SSH root@$ip bash <<'PGBOUNCER'
-              set -euo pipefail
-              source /srv/app/.env
-              PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
-              PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-              PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-              PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-
-              sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
-                  -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
-                  /srv/app/infra/pgbouncer/pgbouncer.ini \
-                  > /etc/pgbouncer/pgbouncer.ini
-
-              echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
-              chmod 640 /etc/pgbouncer/userlist.txt
-              chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
-
-              systemctl reload pgbouncer || systemctl restart pgbouncer
-          PGBOUNCER
+      - name: Health check
+        run: |
+          echo "Health-checking $NODE_NAME..."
+          for attempt in $(seq 1 15); do
+            if $SSH deploy@$NODE_IP 'curl -sf --max-time 3 http://localhost:3000/' > /dev/null 2>&1; then
+              echo "Health check passed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -eq 15 ]; then
+              echo "::error::Health check failed for $NODE_NAME after 15 attempts"
+              exit 1
+            fi
+            sleep 2
           done
+
+      - name: PM2 status check
+        id: pm2check
+        run: |
+          echo "PM2 status on $NODE_NAME:"
+          pm2_status=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"')
+          echo "$pm2_status"
+          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
+          if echo "$pm2_status" | grep -q "errored"; then
+            echo "has_error=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_error=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rollback
+        if: ${{ matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
+        run: |
+          echo "::error::PM2 errored on $NODE_NAME — rolling back"
+          rsync -az --delete --exclude='node_modules/' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            /tmp/app-backup/ deploy@$NODE_IP:/srv/app/
+          $SSH deploy@$NODE_IP 'pm2 reload ecosystem.config.js --update-env'
+
+      - name: Re-enable in HAProxy
+        if: always()
+        run: |
+          echo "Re-enabling $HA_SERVER in HAProxy..."
+          $SSH root@$LB \
+            "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"
+
+      - name: Fail if PM2 errored
+        if: ${{ steps.pm2check.outputs.has_error == 'true' }}
+        run: exit 1
+
+      - name: Configure PgBouncer
+        run: |
+          $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./infra/pgbouncer/ deploy@$NODE_IP:/srv/app/infra/pgbouncer/
+
+          $SSH root@$NODE_IP bash <<'PGBOUNCER'
+            set -euo pipefail
+            source /srv/app/.env
+            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                /srv/app/infra/pgbouncer/pgbouncer.ini \
+                > /etc/pgbouncer/pgbouncer.ini
+
+            echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
+            chmod 640 /etc/pgbouncer/userlist.txt
+            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+            systemctl reload pgbouncer || systemctl restart pgbouncer
+          PGBOUNCER
 
   deploy-frontend:
     name: Deploy frontend to LB
-    needs: [setup, rolling-deploy]
+    needs: [setup, deploy-node]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -261,7 +238,6 @@ jobs:
         run: npm ci && npm run build
 
       - name: Set up SSH key
-        if: steps.fe.outputs.exists == 'true'
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -277,10 +253,6 @@ jobs:
 
       - name: Deploy Vector config to LB node
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
           sed "s|\${AXIOM_TOKEN_LB}|${{ secrets.AXIOM_TOKEN_LB }}|g" \
             infra/vector/vector.yaml \
             | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
