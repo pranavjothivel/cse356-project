@@ -209,11 +209,7 @@ async function start() {
   const server = http.createServer(app);
   const wss = new WebSocket.Server({ server });
   configureWSServer(wss);
-  server.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-    // DELIBERATE TEST CRASH — triggers PM2 errored path after health check passes
-    setTimeout(() => { throw new Error('deliberate rollback test'); }, 3000);
-  });
+  server.listen(port, () => console.log(`Server running on port ${port}`));
 }
 
 start().catch(err => { console.error('Failed to start:', err); process.exit(1); });
