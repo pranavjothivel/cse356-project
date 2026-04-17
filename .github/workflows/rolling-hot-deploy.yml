@@ -128,7 +128,7 @@ jobs:
           # Record error log offset before reload so the PM2 status check only
           # shows lines written by the new process, not leftover history.
           $SSH deploy@$NODE_IP \
-            'wc -c < ~/.pm2/logs/cse356-error.log 2>/dev/null || echo 0' \
+            'cat ~/.pm2/logs/cse356-error.log 2>/dev/null | wc -c' \
             > /tmp/pm2-err-offset
 
           $SSH deploy@$NODE_IP bash <<'REMOTE'
