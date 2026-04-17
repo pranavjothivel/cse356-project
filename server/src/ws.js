@@ -488,7 +488,7 @@ const configureWSServer = (wss) => {
           }
         }
 
-        console.log(`${id} disconnected on connId ${connId}`);
+        console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
       }
       catch (err) {
         try { await release() } catch (e) { console.log(e); }
@@ -597,7 +597,7 @@ const configureWSServer = (wss) => {
         broadcastPresenceChange(id, 'online');
       }
 
-      console.log(`${id} connected on connId ${connId}`);
+      console.log(`${id} connected on connId ${connId} at ${(new Date()).toString()}`);
     }
     catch (err) {
       console.log(err);
