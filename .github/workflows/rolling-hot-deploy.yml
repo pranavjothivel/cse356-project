@@ -11,6 +11,10 @@ on:
         description: 'Seconds to wait after draining a node (for in-flight requests to finish)'
         required: false
         default: '10'
+      target_node:
+        description: 'Deploy to a single node only (1–4). Leave empty to roll all nodes.'
+        required: false
+        default: ''
 
 jobs:
   setup:
@@ -43,6 +47,7 @@ jobs:
     env:
       LB: ${{ needs.setup.outputs.lb }}
       DRAIN_WAIT: ${{ inputs.drain_wait }}
+      TARGET_NODE: ${{ inputs.target_node }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +67,7 @@ jobs:
           set -euo pipefail
 
           node_count=$(echo "$NODES_JSON" | jq length)
+          nodes_deployed=0
 
           for i in $(seq 0 $(( node_count - 1 ))); do
             name=$(echo "$NODES_JSON" | jq -r ".[$i].name")
@@ -69,6 +75,21 @@ jobs:
 
             # HAProxy server names are node1, node2, ... (1-indexed)
             ha_server="node$(( i + 1 ))"
+
+            # Skip if a specific target node was requested
+            if [ -n "$TARGET_NODE" ] && [ "$(( i + 1 ))" != "$TARGET_NODE" ]; then
+              echo "Skipping $name (target_node=$TARGET_NODE)"
+              continue
+            fi
+
+            # Track whether this is the first node deployed in this run
+            # (used for snapshot + rollback logic — independent of absolute index)
+            if [ "$nodes_deployed" -eq 0 ]; then
+              first_in_run=true
+            else
+              first_in_run=false
+            fi
+            nodes_deployed=$(( nodes_deployed + 1 ))
 
             echo "=========================================="
             echo "Deploying to $name ($ip) — HAProxy server: $ha_server"
@@ -83,7 +104,7 @@ jobs:
             sleep "$DRAIN_WAIT"
 
             # --- 2. Snapshot node[0] on the runner for rollback ---
-            if [ "$i" -eq 0 ]; then
+            if [ "$first_in_run" = "true" ]; then
               echo "Snapshotting $name → runner for rollback..."
               mkdir -p /tmp/app-backup
               rsync -az --exclude='node_modules/' \
@@ -154,7 +175,7 @@ jobs:
             echo "$pm2_status"
             $SSH root@$ip 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
 
-            if [ "$i" -eq 0 ] && echo "$pm2_status" | grep -q "errored"; then
+            if [ "$first_in_run" = "true" ] && echo "$pm2_status" | grep -q "errored"; then
               echo "::error::PM2 instances errored on $name — rolling back"
               rsync -az --delete --exclude='node_modules/' \
                 -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
