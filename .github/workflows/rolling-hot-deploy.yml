@@ -236,7 +236,7 @@ jobs:
       - name: Abort — deployed ref did not start cleanly
         if: ${{ always() && steps.pm2check.outputs.has_error == 'true' }}
         run: |
-          echo "::error::Deploy of ref '${{ github.ref_name }}' (sha ${{ github.sha }}) failed on $NODE_NAME — PM2 did not reach a healthy state."
+          echo "::error::Deploy of branch '${{ github.ref_name }}' @ ${GITHUB_SHA:0:7} failed on $NODE_NAME — PM2 did not reach a healthy state."
           echo "::error::A rollback to the previous snapshot has been applied. Investigate the ref before re-deploying."
           exit 1
 
