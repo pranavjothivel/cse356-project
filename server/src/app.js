@@ -10,6 +10,11 @@ const { RedisStore } = require('connect-redis');
 const { Pool } = require('pg');
 const cors = require('cors');
 const http = require('http');
+
+// OTel, Sentry, Express internals, and our metrics middleware each attach a
+// 'finish' listener per response — bump the prototype limit to silence the
+// MaxListenersExceededWarning (not a memory leak, just multiple legitimate listeners).
+http.ServerResponse.prototype.setMaxListeners(25);
 const WebSocket = require('ws');
 
 const sequelize = require('./db');
