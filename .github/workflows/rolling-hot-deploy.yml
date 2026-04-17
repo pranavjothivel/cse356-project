@@ -39,7 +39,7 @@ jobs:
           lb=$(yq '.lb_node' infra/nodes.yml)
 
           # Annotate each node with its HAProxy server name and whether it is first
-          nodes=$(echo "$nodes" | jq '[to_entries[] | .value + {
+          nodes=$(echo "$nodes" | jq -c '[to_entries[] | .value + {
             ha_server: ("node" + ((.key + 1) | tostring)),
             is_first:  (.key == 0)
           }]')
@@ -48,7 +48,7 @@ jobs:
           target="${{ inputs.target_node }}"
           if [ -n "$target" ]; then
             idx=$(( target - 1 ))
-            nodes=$(echo "$nodes" | jq --argjson idx "$idx" '[.[$idx] | .is_first = true]')
+            nodes=$(echo "$nodes" | jq -c --argjson idx "$idx" '[.[$idx] | .is_first = true]')
           fi
 
           echo "nodes=$nodes" >> "$GITHUB_OUTPUT"
