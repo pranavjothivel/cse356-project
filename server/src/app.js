@@ -1,8 +1,8 @@
 require('./instrument');
 require('dotenv').config();
-const { trace, SpanStatusCode } = require('@opentelemetry/api');
-const os = require('os');
-const HOSTNAME = os.hostname();
+// const { trace, SpanStatusCode } = require('@opentelemetry/api');
+// const os = require('os');
+// const HOSTNAME = os.hostname();
 const express = require('express');
 const session = require('express-session');
 //const pgSession = require('connect-pg-simple')(session);
@@ -14,7 +14,7 @@ const http = require('http');
 // OTel, Sentry, Express internals, and our metrics middleware each attach a
 // 'finish' listener per response — bump the prototype limit to silence the
 // MaxListenersExceededWarning (not a memory leak, just multiple legitimate listeners).
-http.ServerResponse.prototype.setMaxListeners(25);
+// http.ServerResponse.prototype.setMaxListeners(25);
 const WebSocket = require('ws');
 
 const sequelize = require('./db');
@@ -125,22 +125,22 @@ app.use(passport.session());
 // - enduser.is_authenticated:  boolean auth state, set on every request
 // - enduser.id:               authenticated user UUID (omitted when unauthenticated)
 // - enduser.username:         authenticated username (omitted when unauthenticated)
-app.use((req, res, next) => {
-  const span = trace.getActiveSpan();
-  if (span) {
-    if (req.ip) span.setAttribute('client.address', req.ip);
-    span.setAttribute('host.name', HOSTNAME);
-    const requestId = req.headers['x-request-id'];
-    if (requestId) span.setAttribute('http.x_request_id', requestId);
-    span.setAttribute('enduser.is_authenticated', !!req.user);
-    if (req.user) {
-      const userId = req.user.id ?? req.user.username;
-      if (userId != null) span.setAttribute('enduser.id', String(userId));
-      if (req.user.username) span.setAttribute('enduser.username', req.user.username);
-    }
-  }
-  next();
-});
+// app.use((req, res, next) => {
+//   const span = trace.getActiveSpan();
+//   if (span) {
+//     if (req.ip) span.setAttribute('client.address', req.ip);
+//     span.setAttribute('host.name', HOSTNAME);
+//     const requestId = req.headers['x-request-id'];
+//     if (requestId) span.setAttribute('http.x_request_id', requestId);
+//     span.setAttribute('enduser.is_authenticated', !!req.user);
+//     if (req.user) {
+//       const userId = req.user.id ?? req.user.username;
+//       if (userId != null) span.setAttribute('enduser.id', String(userId));
+//       if (req.user.username) span.setAttribute('enduser.username', req.user.username);
+//     }
+//   }
+//   next();
+// });
 
 // ──────────────────────────────────────────────
 // Routes
@@ -159,15 +159,15 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });
 });
 
-const Sentry = require('@sentry/node');
-Sentry.setupExpressErrorHandler(app);
+// const Sentry = require('@sentry/node');
+// Sentry.setupExpressErrorHandler(app);
 
 app.use((err, req, res, next) => {
-  const span = trace.getActiveSpan();
-  if (span) {
-    span.recordException(err);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-  }
+  // const span = trace.getActiveSpan();
+  // if (span) {
+  //   span.recordException(err);
+  //   span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+  // }
   console.error(err);
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
