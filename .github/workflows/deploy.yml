@@ -159,15 +159,6 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
 
-      - name: Deploy Vector config to LB node
-        run: |
-          sed "s|\${AXIOM_TOKEN_LB}|${{ secrets.AXIOM_TOKEN_LB }}|g" \
-            infra/vector/vector.yaml \
-            | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-              root@${{ needs.setup.outputs.lb }} "cat > /etc/vector/vector.yaml"
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            root@${{ needs.setup.outputs.lb }} "systemctl reload-or-restart vector"
-
   deploy-lb-configs:
     name: Deploy LB configs (HAProxy + Nginx)
     needs: setup
