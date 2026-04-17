@@ -13,6 +13,7 @@ All nodes are Linodes on the CSE356 course cluster (Clanode 4G unless noted).
 | `group1-db-psql-01` | PostgreSQL database | `130.245.136.224` | `10.0.1.235` |
 | `group1-db-redis-01` | Redis (sessions, pub/sub, presence) | `130.245.136.86` | `10.0.0.136` |
 | `group1-web-lb01` | Load balancer + frontend (Nginx) | `130.245.136.254` | — |
+| `group1-telemetry-01` | Grafana Alloy telemetry node | `130.245.136.96` | `10.0.0.235` |
 
 > App nodes and the LB connect to PostgreSQL and Redis over the **private network** (10.x addresses). Public IPs for DB/cache nodes are for direct SSH access only — never exposed to application traffic.
 
