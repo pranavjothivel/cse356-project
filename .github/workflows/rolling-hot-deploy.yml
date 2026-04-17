@@ -180,6 +180,30 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
             /tmp/app-backup/ deploy@$NODE_IP:/srv/app/
           $SSH deploy@$NODE_IP 'pm2 restart cse356'
+          echo "::notice::Rollback successful on $NODE_NAME"
+
+      - name: Post-rollback health check
+        if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
+        run: |
+          echo "Health-checking $NODE_NAME after rollback..."
+          for attempt in $(seq 1 15); do
+            if $SSH deploy@$NODE_IP 'curl -sf --max-time 3 http://localhost:3000/' > /dev/null 2>&1; then
+              echo "Post-rollback health check passed on attempt $attempt"
+              exit 0
+            fi
+            if [ "$attempt" -eq 15 ]; then
+              echo "::error::Post-rollback health check failed for $NODE_NAME — node may be stuck"
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Post-rollback PM2 status check
+        if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
+        run: |
+          echo "PM2 status on $NODE_NAME after rollback:"
+          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
+          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
 
       - name: Re-enable in HAProxy
         if: always()
