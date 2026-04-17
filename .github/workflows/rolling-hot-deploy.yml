@@ -255,7 +255,7 @@ jobs:
             | $SSH root@$TELEMETRY 'cat > /root/redis-cleanup/.env'
 
       - name: Install deps
-        run: $SSH root@$TELEMETRY 'cd /root/redis-cleanup && /root/.nvm/versions/node/v24.0.2/bin/npm install --omit=dev --prefer-offline'
+        run: $SSH root@$TELEMETRY '. /root/.nvm/nvm.sh && cd /root/redis-cleanup && npm install --omit=dev --prefer-offline'
 
   deploy-frontend:
     name: Deploy frontend to LB
