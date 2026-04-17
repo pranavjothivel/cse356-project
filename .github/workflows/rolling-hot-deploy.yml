@@ -202,8 +202,13 @@ jobs:
         if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
         run: |
           echo "PM2 status on $NODE_NAME after rollback:"
-          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
+          pm2_status=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"')
+          echo "$pm2_status"
           $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 logs cse356 --err --nostream --lines 20"'
+          if echo "$pm2_status" | grep -q "errored"; then
+            echo "::error::PM2 still errored on $NODE_NAME after rollback"
+            exit 1
+          fi
 
       - name: Re-enable in HAProxy
         if: always()
@@ -217,6 +222,7 @@ jobs:
         run: exit 1
 
       - name: Configure PgBouncer
+        if: always()
         run: |
           $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"
           rsync -az \
