@@ -17,3 +17,4 @@ app_nodes:
     type: 1vcpu-2gb
 
 lb_node: 130.245.136.254
+telemetry_node: 130.245.136.96
