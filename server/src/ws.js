@@ -163,7 +163,6 @@ const connections = new Map();
  * Used to spread pings equally over the interval to reduce any potential load from pong writes
  */
 function pingLocalConnections(firstCharInId) {
-  let time1 = Date.now();
   let connectionsArray = [...connections];
   for (let i = 0; i < connectionsArray.length; i++) {
     if (connectionsArray[i][0][0] !== firstCharInId) continue;
@@ -177,9 +176,6 @@ function pingLocalConnections(firstCharInId) {
     }
     catch (e) {ws.close();}
   }
-
-  let time2 = Date.now();
-  console.log(`Pinged local connections starting with ${firstCharInId} in ${time2-time1}ms`);
 }
 let idChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
 for (let i = 0; i <= 15; i++)
@@ -336,6 +332,8 @@ async function broadcastPresenceChange(userId, presence) {
 
 
 let wsMessageMetrics = { numMessages: 0, sumProcessing: 0 };
+let wsInitMetrics = { numInits: 0, sumProcessing: 0 };
+
 function updateWSMetrics(start_date) {
   let end_date = Date.now();
   wsMessageMetrics.numMessages++;
@@ -343,9 +341,11 @@ function updateWSMetrics(start_date) {
 }
 
 function logWSMetrics() {
-  let avg = 0;
-  if (wsMessageMetrics.numMessages > 0) avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
-  console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${avg} ms average processing time`);
+  let msg_avg = 0, init_avg;
+  if (wsMessageMetrics.numMessages > 0) msg_avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
+  if (wsInitMetrics.numInits > 0) init_avg = wsInitMetrics.sumProcessing / wsInitMetrics.numInits;
+  console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${msg_avg} ms average processing time`);
+  console.log(`WS Init Metrics: ${wsInitMetrics.numInits} messages, ${init_avg} ms average processing time`);
 }
 setInterval(logWSMetrics, 30000);
 
@@ -532,12 +532,12 @@ const configureWSServer = (wss) => {
     let didResetAway = false;
     let wasFirstConn = false;
     try {
+      let initdate1 = Date.now();
+
       // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
       const token = url.searchParams.get('token');
       id = jwt.verify(token, process.env.JWT_SECRET).id;
-
-      const dbUser = await User.findByPk(id);
 
       // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
       // says "disconnect/reconnect doesn't count as activity", which we read
@@ -554,9 +554,21 @@ const configureWSServer = (wss) => {
       let initRelease = async () => {};
       try {
         initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
+
+        let conns = users.get(id);
+        if (!conns) {
+          conns = { [connId]: ws };
+          users.set(id, conns);
+        }
+        else conns[connId] = ws;
+        connections.set(connId, { userId: id, ws });
+
         const existingStr = await redisClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;
+
+        // It's ok to move the psql query inside here - the same user sending messages from existing connections at the same time is hardly an issue
+        const dbUser = await User.findByPk(id);
 
         if (isFirstConn && dbUser && dbUser.away) {
           dbUser.away = false;
@@ -590,15 +602,6 @@ const configureWSServer = (wss) => {
         user.presence = finalPresence;
 
         await redisClient.hSet(`users:${id}`, "body", JSON.stringify(user));
-
-        let conns = users.get(id);
-        if (!conns) {
-          conns = { [connId]: ws };
-          users.set(id, conns);
-        }
-        else conns[connId] = ws;
-        connections.set(connId, { userId: id, ws });
-
         await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
 
         await initRelease();
@@ -627,6 +630,10 @@ const configureWSServer = (wss) => {
       if (wasFirstConn) {
         broadcastPresenceChange(id, 'online');
       }
+
+      let initdate2 = Date.now();
+      wsInitMetrics.numInits++;
+      wsInitMetrics.sumProcessing += initdate2 - initdate1;
 
       console.log(`${id} connected on connId ${connId} at ${(new Date).toString()}`);
     }
