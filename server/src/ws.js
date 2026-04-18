@@ -332,7 +332,8 @@ async function broadcastPresenceChange(userId, presence) {
 
 
 let wsMessageMetrics = { numMessages: 0, sumProcessing: 0 };
-let wsInitMetrics = { numInits: 0, sumProcessing: 0 };
+let wsInitMetrics = { numInits: 0, sumProcessing: 0 };  // Time for complete ws initialization
+let wsInitMetrics2 = { numInits: 0, sumProcessing: 0 }; // Time until local users map is updated
 
 function updateWSMetrics(start_date) {
   let end_date = Date.now();
@@ -341,11 +342,13 @@ function updateWSMetrics(start_date) {
 }
 
 function logWSMetrics() {
-  let msg_avg = 0, init_avg;
+  let msg_avg = 0, init_avg = 0, init2_avg = 0;
   if (wsMessageMetrics.numMessages > 0) msg_avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
   if (wsInitMetrics.numInits > 0) init_avg = wsInitMetrics.sumProcessing / wsInitMetrics.numInits;
+  if (wsInitMetrics2.numInits > 0) init2_avg = wsInitMetrics2.sumProcessing / wsInitMetrics2.numInits;
   console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${msg_avg} ms average processing time`);
-  console.log(`WS Init Metrics: ${wsInitMetrics.numInits} messages, ${init_avg} ms average processing time`);
+  console.log(`WS Init Metrics: ${wsInitMetrics.numInits} inits, ${init_avg} ms average processing time`);
+  console.log(`WS Init Local Update Metrics: ${wsInitMetrics2.numInits} inits, ${init2_avg} ms average processing time`);
 }
 setInterval(logWSMetrics, 30000);
 
@@ -533,6 +536,8 @@ const configureWSServer = (wss) => {
     let wasFirstConn = false;
     try {
       let initdate1 = Date.now();
+      let initdate2;
+      let updateUsersMapTime;
 
       // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
@@ -551,10 +556,8 @@ const configureWSServer = (wss) => {
       // auth state flips before HomeScreen's ready-handler reads
       // auth.user.away and sends the initial presence frame.
 
-      let initRelease = async () => {};
-      try {
-        initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
-
+      // Update users map asap
+      await withUserPresenceLock(id, () => {
         let conns = users.get(id);
         if (!conns) {
           conns = { [connId]: ws };
@@ -562,6 +565,16 @@ const configureWSServer = (wss) => {
         }
         else conns[connId] = ws;
         connections.set(connId, { userId: id, ws });
+
+        initdate2 = Date.now();
+        updateUsersMapTime = initdate2 - initdate1;
+        wsInitMetrics2.numInits++;
+        wsInitMetrics2.sumProcessing += updateUsersMapTime;
+      });
+
+      let initRelease = async () => {};
+      try {
+        initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
 
         const existingStr = await redisClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
@@ -631,11 +644,11 @@ const configureWSServer = (wss) => {
         broadcastPresenceChange(id, 'online');
       }
 
-      let initdate2 = Date.now();
+      initdate2 = Date.now();
       wsInitMetrics.numInits++;
       wsInitMetrics.sumProcessing += initdate2 - initdate1;
 
-      console.log(`${id} connected on connId ${connId} at ${(new Date).toString()}`);
+      console.log(`${id} connected on connId ${connId} at ${(new Date).toString()}, updated local users in ${updateUsersMapTime} ms`);
     }
     catch (err) {
       console.log(err);
