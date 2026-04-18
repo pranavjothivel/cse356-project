@@ -38,7 +38,13 @@ app.set('trust proxy', 1);
 
 
 /**
- * route -> { reqs (number of requests), sumResponse (sum of response times) }
+ * route -> { 
+ *  reqs (number of requests), 
+ *  sumResponse (sum of response times),  
+ *  last100Times,
+ *  p95_num,
+ *  p95_sum
+ * }
  */
 let metrics = new Map();
 
@@ -52,10 +58,24 @@ app.use((req, res, next) => {
       let date2 = Date.now();
       let metric = metrics.get(route);
       if (!metric) {
-        metric = {reqs: 0, sumResponse: 0}
+        metric = {reqs: 0, sumResponse: 0, last100Times: [], p95_num: 0, p95_sum: 0}
       }
+      
+      let resTime = date2 - date1;
       metric.reqs++;
-      metric.sumResponse += date2 - date1;
+      metric.sumResponse += resTime;
+
+      /*last100Times holds the latest response times for the route. Instead of getting p95 
+        from an array of ALL response times, estimate it by averaging the 95th percentile of every ~100
+      */
+      metric.last100Times.push(resTime);
+      if (metric.last100Times.length >= 100) {
+        let i = Math.ceil(metric.last100Times.length*.95 - 1);
+        let arr = [...metric.last100Times].sort((a, b) => a - b);
+        metric.last100Times = [];
+        metric.p95_num++;
+        metric.p95_sum += arr[i];
+      }
       metrics.set(route, metric);
     }
     catch (err) {}
@@ -76,7 +96,7 @@ app.get('/api/metrics', (req, res, next) => {
 
     let html = '';
     metricsArray.forEach((v) => {
-      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}</p>`;
+      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}, p95 Estimation: ${(v[1].p95_sum / v[1].p95_num).toFixed(3)}</p>`;
     });
     return res.send(html);
   }
