@@ -1,8 +1,8 @@
 require('./instrument');
 require('dotenv').config();
-const { trace, SpanStatusCode } = require('@opentelemetry/api');
-const os = require('os');
-const HOSTNAME = os.hostname();
+// const { trace, SpanStatusCode } = require('@opentelemetry/api');
+// const os = require('os');
+// const HOSTNAME = os.hostname();
 const express = require('express');
 const session = require('express-session');
 //const pgSession = require('connect-pg-simple')(session);
@@ -14,7 +14,7 @@ const http = require('http');
 // OTel, Sentry, Express internals, and our metrics middleware each attach a
 // 'finish' listener per response — bump the prototype limit to silence the
 // MaxListenersExceededWarning (not a memory leak, just multiple legitimate listeners).
-http.ServerResponse.prototype.setMaxListeners(25);
+// http.ServerResponse.prototype.setMaxListeners(25);
 const WebSocket = require('ws');
 
 const sequelize = require('./db');
@@ -38,13 +38,7 @@ app.set('trust proxy', 1);
 
 
 /**
- * route -> { 
- *  reqs (number of requests), 
- *  sumResponse (sum of response times),  
- *  last100Times,
- *  p95_num,
- *  p95_sum
- * }
+ * route -> { reqs (number of requests), sumResponse (sum of response times) }
  */
 let metrics = new Map();
 
@@ -58,24 +52,10 @@ app.use((req, res, next) => {
       let date2 = Date.now();
       let metric = metrics.get(route);
       if (!metric) {
-        metric = {reqs: 0, sumResponse: 0, last100Times: [], p95_num: 0, p95_sum: 0}
+        metric = {reqs: 0, sumResponse: 0}
       }
-      
-      let resTime = date2 - date1;
       metric.reqs++;
-      metric.sumResponse += resTime;
-
-      /*last100Times holds the latest response times for the route. Instead of getting p95 
-        from an array of ALL response times, estimate it by averaging the 95th percentile of every ~100
-      */
-      metric.last100Times.push(resTime);
-      if (metric.last100Times.length >= 100) {
-        let i = Math.ceil(metric.last100Times.length*.95 - 1);
-        let arr = [...metric.last100Times].sort((a, b) => a - b);
-        metric.last100Times = [];
-        metric.p95_num++;
-        metric.p95_sum += arr[i];
-      }
+      metric.sumResponse += date2 - date1;
       metrics.set(route, metric);
     }
     catch (err) {}
@@ -96,7 +76,7 @@ app.get('/api/metrics', (req, res, next) => {
 
     let html = '';
     metricsArray.forEach((v) => {
-      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}, p95 Estimation: ${(v[1].p95_sum / v[1].p95_num).toFixed(3)}</p>`;
+      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}</p>`;
     });
     return res.send(html);
   }
@@ -145,22 +125,23 @@ app.use(passport.session());
 // - enduser.is_authenticated:  boolean auth state, set on every request
 // - enduser.id:               authenticated user UUID (omitted when unauthenticated)
 // - enduser.username:         authenticated username (omitted when unauthenticated)
-app.use((req, res, next) => {
-  const span = trace.getActiveSpan();
-  if (span) {
-    if (req.ip) span.setAttribute('client.address', req.ip);
-    span.setAttribute('host.name', HOSTNAME);
-    const requestId = req.headers['x-request-id'];
-    if (requestId) span.setAttribute('http.x_request_id', requestId);
-    span.setAttribute('enduser.is_authenticated', !!req.user);
-    if (req.user) {
-      const userId = req.user.id ?? req.user.username;
-      if (userId != null) span.setAttribute('enduser.id', String(userId));
-      if (req.user.username) span.setAttribute('enduser.username', req.user.username);
-    }
-  }
-  next();
-});
+// OTel span attributes disabled — see PR #128
+// app.use((req, res, next) => {
+//   const span = trace.getActiveSpan();
+//   if (span) {
+//     if (req.ip) span.setAttribute('client.address', req.ip);
+//     span.setAttribute('host.name', HOSTNAME);
+//     const requestId = req.headers['x-request-id'];
+//     if (requestId) span.setAttribute('http.x_request_id', requestId);
+//     span.setAttribute('enduser.is_authenticated', !!req.user);
+//     if (req.user) {
+//       const userId = req.user.id ?? req.user.username;
+//       if (userId != null) span.setAttribute('enduser.id', String(userId));
+//       if (req.user.username) span.setAttribute('enduser.username', req.user.username);
+//     }
+//   }
+//   next();
+// });
 
 // ──────────────────────────────────────────────
 // Routes
@@ -179,15 +160,15 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', user: req.user?.username || null });
 });
 
-const Sentry = require('@sentry/node');
-Sentry.setupExpressErrorHandler(app);
+// const Sentry = require('@sentry/node');
+// Sentry.setupExpressErrorHandler(app);
 
 app.use((err, req, res, next) => {
-  const span = trace.getActiveSpan();
-  if (span) {
-    span.recordException(err);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-  }
+  // const span = trace.getActiveSpan();
+  // if (span) {
+  //   span.recordException(err);
+  //   span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+  // }
   console.error(err);
   res.status(500).json({ error: err.message || 'Internal server error' });
 });

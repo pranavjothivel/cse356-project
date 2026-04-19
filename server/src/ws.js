@@ -157,29 +157,10 @@ const users = new Map();
 const connections = new Map();
 
 
-/**
- * Pings all local connections whose ids start with firstCharInId
- * 
- * Used to spread pings equally over the interval to reduce any potential load from pong writes
- */
-function pingLocalConnections(firstCharInId) {
-  let connectionsArray = [...connections];
-  for (let i = 0; i < connectionsArray.length; i++) {
-    if (connectionsArray[i][0][0] !== firstCharInId) continue;
-    
-    let ws;
-    try { ws = connectionsArray[i][1].ws; } catch (e) {}
-    if (!ws) continue;
-
-    try {
-      ws.ping();
-    }
-    catch (e) {ws.close();}
-  }
-}
-let idChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
-for (let i = 0; i <= 15; i++)
-  setTimeout(() => {setInterval(pingLocalConnections, 60000, idChars[i])}, 3750*i);
+// Ping/pong disabled — confirmed independently causes latency spikes
+// via Redis SET contention on the shared delivery client.
+// To re-enable, use a dedicated Redis client for conns: writes.
+// See PR #120 / #128 for test results.
 
 
 /**
@@ -332,9 +313,6 @@ async function broadcastPresenceChange(userId, presence) {
 
 
 let wsMessageMetrics = { numMessages: 0, sumProcessing: 0 };
-let wsInitMetrics = { numInits: 0, sumProcessing: 0 };  // Time for complete ws initialization
-let wsInitMetrics2 = { numInits: 0, sumProcessing: 0 }; // Time until local users map is updated
-
 function updateWSMetrics(start_date) {
   let end_date = Date.now();
   wsMessageMetrics.numMessages++;
@@ -342,13 +320,9 @@ function updateWSMetrics(start_date) {
 }
 
 function logWSMetrics() {
-  let msg_avg = 0, init_avg = 0, init2_avg = 0;
-  if (wsMessageMetrics.numMessages > 0) msg_avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
-  if (wsInitMetrics.numInits > 0) init_avg = wsInitMetrics.sumProcessing / wsInitMetrics.numInits;
-  if (wsInitMetrics2.numInits > 0) init2_avg = wsInitMetrics2.sumProcessing / wsInitMetrics2.numInits;
-  console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${msg_avg} ms average processing time`);
-  console.log(`WS Init Metrics: ${wsInitMetrics.numInits} inits, ${init_avg} ms average processing time`);
-  console.log(`WS Init Local Update Metrics: ${wsInitMetrics2.numInits} inits, ${init2_avg} ms average processing time`);
+  let avg = 0;
+  if (wsMessageMetrics.numMessages > 0) avg = wsMessageMetrics.sumProcessing / wsMessageMetrics.numMessages;
+  console.log(`WS Message Metrics: ${wsMessageMetrics.numMessages} messages, ${avg} ms average processing time`);
 }
 setInterval(logWSMetrics, 30000);
 
@@ -464,15 +438,7 @@ const configureWSServer = (wss) => {
       }
     });
 
-    ws.on('pong', async () => {
-      try {
-        await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
-      }
-      catch (err) {
-        console.log(err);
-        ws.close();
-      }
-    });
+    // ws.on('pong') removed — see PR #128
 
     ws.on('close', async () => {
       if (!id) return; // init failed, nothing to clean up
@@ -497,8 +463,7 @@ const configureWSServer = (wss) => {
         // contains our connId to avoid racing with a concurrent init.
         if (connIds.length <= 1 && redisUser.conns[connId]) {
           await redisClient.del(`users:${id}`);
-          const localConns = users.get(id);
-          if (localConns && localConns.length <= 1) users.delete(id);
+          users.delete(id);
           broadcastPresenceChange(id, 'offline');
         }
         else {
@@ -523,7 +488,7 @@ const configureWSServer = (wss) => {
           }
         }
 
-        console.log(`${id} disconnected on connId ${connId} at ${(new Date).toString()}`);
+        console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
       }
       catch (err) {
         try { await release() } catch (e) { console.log(e); }
@@ -536,14 +501,12 @@ const configureWSServer = (wss) => {
     let didResetAway = false;
     let wasFirstConn = false;
     try {
-      let initdate1 = Date.now();
-      let initdate2;
-      let updateUsersMapTime;
-
       // Client GETS /auth/generate-ws-token, then attaches the token to this request
       const url = new URL(req.url, process.env.BASE_URL);
       const token = url.searchParams.get('token');
       id = jwt.verify(token, process.env.JWT_SECRET).id;
+
+      const dbUser = await User.findByPk(id);
 
       // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
       // says "disconnect/reconnect doesn't count as activity", which we read
@@ -557,32 +520,12 @@ const configureWSServer = (wss) => {
       // auth state flips before HomeScreen's ready-handler reads
       // auth.user.away and sends the initial presence frame.
 
-      // Update users map asap
-      await withUserPresenceLock(id, () => {
-        let conns = users.get(id);
-        if (!conns) {
-          conns = { [connId]: ws };
-          users.set(id, conns);
-        }
-        else conns[connId] = ws;
-        connections.set(connId, { userId: id, ws });
-
-        initdate2 = Date.now();
-        updateUsersMapTime = initdate2 - initdate1;
-        wsInitMetrics2.numInits++;
-        wsInitMetrics2.sumProcessing += updateUsersMapTime;
-      });
-
       let initRelease = async () => {};
       try {
         initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
-
         const existingStr = await redisClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;
-
-        // It's ok to move the psql query inside here - the same user sending messages from existing connections at the same time is hardly an issue
-        const dbUser = await User.findByPk(id);
 
         if (isFirstConn && dbUser && dbUser.away) {
           dbUser.away = false;
@@ -616,7 +559,16 @@ const configureWSServer = (wss) => {
         user.presence = finalPresence;
 
         await redisClient.hSet(`users:${id}`, "body", JSON.stringify(user));
-        await redisClient.set(`conns:${connId}`, 1, { EX: 120 });
+
+        let conns = users.get(id);
+        if (!conns) {
+          conns = { [connId]: ws };
+          users.set(id, conns);
+        }
+        else conns[connId] = ws;
+        connections.set(connId, { userId: id, ws });
+
+        // conns: SET removed — part of ping/pong, see PR #128
 
         await initRelease();
       }
@@ -645,11 +597,7 @@ const configureWSServer = (wss) => {
         broadcastPresenceChange(id, 'online');
       }
 
-      initdate2 = Date.now();
-      wsInitMetrics.numInits++;
-      wsInitMetrics.sumProcessing += initdate2 - initdate1;
-
-      console.log(`${id} connected on connId ${connId} at ${(new Date).toString()}, updated local users in ${updateUsersMapTime} ms`);
+      console.log(`${id} connected on connId ${connId} at ${(new Date()).toString()}`);
     }
     catch (err) {
       console.log(err);
