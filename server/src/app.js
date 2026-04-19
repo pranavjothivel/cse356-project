@@ -1,4 +1,4 @@
-require('./instrument');
+// require('./instrument');
 require('dotenv').config();
 // const { trace, SpanStatusCode } = require('@opentelemetry/api');
 // const os = require('os');
