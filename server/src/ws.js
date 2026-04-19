@@ -497,7 +497,8 @@ const configureWSServer = (wss) => {
         // contains our connId to avoid racing with a concurrent init.
         if (connIds.length <= 1 && redisUser.conns[connId]) {
           await redisClient.del(`users:${id}`);
-          users.delete(id);
+          const localConns = users.get(id);
+          if (localConns && localConns.length <= 1) users.delete(id);
           broadcastPresenceChange(id, 'offline');
         }
         else {
