@@ -305,22 +305,11 @@ async function broadcastPresenceChange(userId, presence) {
   const audienceIds = await getPresenceAudienceUserIds(userId);
   if (audienceIds.length === 0) return;
 
-  // If there's significantly more related users than live users, 
-  // don't publish a potentially several-megabyte message, just send a fanout_all
-  if (audienceIds.length > 10000) {
-    broadcastToAllConnected({
-      type: 'presence.changed',
-      userId,
-      presence
-    }, { excludeUserId: userId });
-  }
-  else {
-    broadcastToUsers(audienceIds, {
-      type: 'presence.changed',
-      userId,
-      presence,
-    });
-  }
+  broadcastToAllConnected({
+    type: 'presence.changed',
+    userId,
+    presence
+  }, { excludeUserId: userId });
 }
 
 
@@ -500,6 +489,7 @@ const configureWSServer = (wss) => {
           }
         }
 
+        await release();
         console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
       }
       catch (err) {
