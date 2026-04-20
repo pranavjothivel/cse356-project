@@ -304,11 +304,23 @@ async function getPresenceAudienceUserIds(userId) {
 async function broadcastPresenceChange(userId, presence) {
   const audienceIds = await getPresenceAudienceUserIds(userId);
   if (audienceIds.length === 0) return;
-  broadcastToUsers(audienceIds, {
-    type: 'presence.changed',
-    userId,
-    presence,
-  });
+
+  // If there's significantly more related users than live users, 
+  // don't publish a potentially several-megabyte message, just send a fanout_all
+  if (audienceIds.length > 10000) {
+    broadcastToAllConnected({
+      type: 'presence.changed',
+      userId: id,
+      presence: finalPresence,
+    }, { excludeUserId: id });
+  }
+  else {
+    broadcastToUsers(audienceIds, {
+      type: 'presence.changed',
+      userId,
+      presence,
+    });
+  }
 }
 
 
