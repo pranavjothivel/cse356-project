@@ -302,9 +302,6 @@ async function getPresenceAudienceUserIds(userId) {
  * approach which sent presence to every connected user in the cluster.
  */
 async function broadcastPresenceChange(userId, presence) {
-  const audienceIds = await getPresenceAudienceUserIds(userId);
-  if (audienceIds.length === 0) return;
-
   broadcastToAllConnected({
     type: 'presence.changed',
     userId,
