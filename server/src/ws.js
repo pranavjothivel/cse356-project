@@ -310,9 +310,9 @@ async function broadcastPresenceChange(userId, presence) {
   if (audienceIds.length > 10000) {
     broadcastToAllConnected({
       type: 'presence.changed',
-      userId: id,
-      presence: finalPresence,
-    }, { excludeUserId: id });
+      userId,
+      presence
+    }, { excludeUserId: userId });
   }
   else {
     broadcastToUsers(audienceIds, {
