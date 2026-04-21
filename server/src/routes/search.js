@@ -5,7 +5,7 @@ const sequelize = require('../db');
 
 // Must match the expression in server/scripts/migrations/0002-messages-fts-index.sql
 // exactly, or the planner will fall back to a seq-scan.
-const FTS_CONFIG = 'english';
+const FTS_CONFIG = 'simple';
 
 function requireAuth(req, res, next) {
   if (req.isAuthenticated()) return next();
