@@ -64,8 +64,12 @@ function handleSubMessage(raw) {
       }
     }
     else if (msg.type === "fanout") {
+      let userIds = msg.userIds;
+      if (userIds.length === 0 && msg.userIdsBuf) {
+        userIds = bufferToUUIDs(Buffer.from(msg.userIdsBuf, 'base64'));
+      }
       // Generic per-user fanout published from any worker. Deliver locally only.
-      deliverLocal(msg.userIds, msg.payload);
+      deliverLocal(userIds, msg.payload);
     }
     else if (msg.type === "fanout_all") {
       // Broadcast payload to every locally connected user (optionally excluding one).
@@ -81,6 +85,27 @@ function handleSubMessage(raw) {
   catch (err) {
     console.error('Redis subscriber handler error:', err);
   }
+}
+
+function bufferToUUIDs(buffer) {
+  const uuids = [];
+
+  for (let i = 0; i < buffer.length; i += 16) {
+    const hex = buffer.slice(i, i + 16).toString('hex');
+
+    // reinsert dashes into UUID format
+    const uuid = [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      hex.slice(12, 16),
+      hex.slice(16, 20),
+      hex.slice(20)
+    ].join('-');
+
+    uuids.push(uuid);
+  }
+
+  return uuids;
 }
 
 /**
@@ -195,11 +220,16 @@ setInterval(logBroadcastMetrics, 30000);
 function broadcastToUsers(userIds, payload) {
   if (!userIds || userIds.length === 0) return;
   let date1 = Date.now();
-  
+
   deliverLocal(userIds, payload);
+
+  const buf = Buffer.concat(
+    userIds.map(u => Buffer.from(u.replace(/-/g, ''), 'hex'))
+  );
+
   redisClient.publish('messages', JSON.stringify({
     serverId,
-    msg: { type: 'fanout', userIds, payload },
+    msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload },
   }));
 
   let date2 = Date.now();
