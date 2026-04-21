@@ -47,7 +47,9 @@ function serializeConversationMessage(m) {
   };
 }
 
-const MEMBER_CACHE_TTL = 60; // seconds
+// Cache time can be long since there aren't many channels 
+// and we have working invalidation, but just in case expire after 10 min
+const MEMBER_CACHE_TTL = 600; // seconds
 
 async function getChannelMemberIds(channelId) {
   const cacheKey = `channel:${channelId}:members`;
