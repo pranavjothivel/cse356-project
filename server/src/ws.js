@@ -28,15 +28,19 @@ const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
 const ConversationParticipant = require('./models/ConversationParticipant');
 const redisClient = require('./redis');
+const { createClient } = require('redis');
 
 // Identifier that should be sent when publishing through Redis
 const serverId = crypto.randomUUID();
 
+
+const publishClient = createClient({ url: process.env.REDIS_PUBLISH_URL });
+publishClient.on('error', err => console.log('Redis Client Error', err));
 // subClient is dedicated to receiving updates published by other instances.
 // Connection + subscription are awaited in initWS() before the HTTP server
 // starts accepting requests, so presence fanout cannot be silently missed
 // during the startup window.
-const subClient = redisClient.duplicate();
+const subClient = publishClient.duplicate();
 subClient.on('error', (err) => console.error('Redis subscriber error:', err));
 
 
@@ -114,9 +118,10 @@ function bufferToUUIDs(buffer) {
  * published by other workers during the startup window would be dropped.
  */
 async function initWS() {
+  await publishClient.connect();
   await subClient.connect();
   await subClient.subscribe('messages', handleSubMessage);
-  console.log("Redis subscriber connected");
+  console.log("Redis publisher and subscriber connected");
 }
 
 // ──────────────────────────────────────────────
@@ -227,7 +232,7 @@ function broadcastToUsers(userIds, payload) {
     userIds.map(u => Buffer.from(u.replace(/-/g, ''), 'hex'))
   );
 
-  redisClient.publish('messages', JSON.stringify({
+  publishClient.publish('messages', JSON.stringify({
     serverId,
     msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload },
   }));
@@ -255,7 +260,7 @@ function notifyUserAwayFrame(userId, value) {
     }
   }
   // Cross-server fanout
-  redisClient.publish('messages', JSON.stringify({
+  publishClient.publish('messages', JSON.stringify({
     serverId,
     msg: { id: userId, type: 'presence', value },
   }));
@@ -276,7 +281,7 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
     }
   }
   // Cross-server fanout
-  redisClient.publish('messages', JSON.stringify({
+  publishClient.publish('messages', JSON.stringify({
     serverId,
     msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
   }));
@@ -441,7 +446,7 @@ const configureWSServer = (wss) => {
 
           // Sync user's own other sessions (cross-server) for away/unaway
           if (newPresence === "away" || newPresence === "unaway") {
-            redisClient.publish("messages", JSON.stringify({
+            publishClient.publish("messages", JSON.stringify({
               serverId,
               msg: { id, type: msg.type, value: msg.value }
             }));
