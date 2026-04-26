@@ -324,19 +324,17 @@ router.post('/:communityId/channels', async (req, res, next) => {
         where: { community_id: req.params.communityId },
         attributes: ['user_id'],
       });
-      await sequelize.transaction(async t => {
-        await ChannelMember.bulkCreate(
-          members.map(m => ({ channel_id: channel.id, user_id: m.user_id })),
-          { 
-            ignoreDuplicates: true,
-            returning: false,
-            validate: false,
-            hooks: false,
-            individualHooks: false,
-            transaction: t
-          }
-        );
-      });
+      await ChannelMember.bulkCreate(
+        members.map(m => ({ channel_id: channel.id, user_id: m.user_id })),
+        { 
+          ignoreDuplicates: true,
+          returning: false,
+          validate: false,
+          hooks: false,
+          individualHooks: false,
+          transaction: t
+        }
+      );
     }
 
     res.status(201).json({ channel: { id: channel.id, name: channel.name, is_private: channel.is_private, community_id: channel.community_id } });
