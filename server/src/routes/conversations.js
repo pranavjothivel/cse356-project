@@ -8,7 +8,7 @@ const User = require('../models/User');
 const { Channel, ChannelMember } = require('../models');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
-const { invalidateConversationMemberCache } = require('./messages');
+const { invalidateConversationMemberCache, getMessage } = require('./messages');
 
 // Matches a canonical UUID v1-v5. Used to guard :id params so literal path
 // segments like "unread" don't reach Sequelize as UUID query values and
@@ -408,9 +408,8 @@ router.post('/:id/read', requireAuth, async (req, res, next) => {
       });
       if (!part) return res.status(404).json({ error: 'Not found' });
 
-      const msg = await Message.findOne({
-        where: { id: messageId, conversation_id: conv.id },
-      });
+
+      const msg = await getMessage(messageId);
       if (!msg) return res.status(404).json({ error: 'Message not found in this conversation' });
 
       if (!await isForwardRead(part.last_read_message_id, msg)) {
@@ -439,9 +438,7 @@ router.post('/:id/read', requireAuth, async (req, res, next) => {
       });
       if (!member) return res.status(404).json({ error: 'Not found' });
 
-      const msg = await Message.findOne({
-        where: { id: messageId, channel_id: channel.id },
-      });
+      const msg = await getMessage(messageId);
       if (!msg) return res.status(404).json({ error: 'Message not found in this channel' });
 
       if (!await isForwardRead(member.last_read_message_id, msg)) {

@@ -4,7 +4,7 @@ const sequelize = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');
-const { invalidateChannelMemberCache } = require('./messages');
+const { invalidateChannelMemberCache, invalidateChannelMember } = require('./messages');
 
 const router = Router();
 
@@ -234,6 +234,7 @@ router.post('/:communityId/leave', async (req, res, next) => {
         where: { channel_id: channels.map(c => c.id), user_id: req.user.id },
       });
       await Promise.all(channels.map(c => invalidateChannelMemberCache(c.id)));
+      await Promise.all(channels.map(c => invalidateChannelMember(c.id, req.user.id)));
     }
 
     await membership.destroy();

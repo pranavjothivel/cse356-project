@@ -373,7 +373,7 @@ router.post('/settings/avatar', requireAuth, async (req, res, next) => {
 
 
 // GET /auth/generate-ws-token
-router.get('/generate-ws-token', requireAuth, async (req, res, next) => {
+router.get('/generate-ws-token', requireAuth, (req, res, next) => {
   try {
     const token = jwt.sign({ id: req.user.id }, process.env.JWT_SECRET, { expiresIn: 60 });
     return res.json({token});
