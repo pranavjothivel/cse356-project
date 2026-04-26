@@ -331,8 +331,7 @@ router.post('/:communityId/channels', async (req, res, next) => {
           returning: false,
           validate: false,
           hooks: false,
-          individualHooks: false,
-          transaction: t
+          individualHooks: false
         }
       );
     }
