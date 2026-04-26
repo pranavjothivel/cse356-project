@@ -21,7 +21,7 @@ const jwt = require('jsonwebtoken');
   }
 */
 const { lock } = require('simple-redis-mutex');
-const lockOptions = { timeout: 200, pollingInterval: 5 };
+const lockOptions = { timeout: 500, pollingInterval: 50 };
 
 const { Op } = require('sequelize');
 const User = require('./models/User');
