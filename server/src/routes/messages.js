@@ -51,6 +51,9 @@ function serializeConversationMessage(m) {
 // and we have working invalidation, but just in case expire after 10 min
 const MEMBER_CACHE_TTL = 600; // seconds
 
+// This should be shorter as its mainly for reads happening immediately after the message is sent
+const MSG_CACHE_TTL = 60; // seconds
+
 async function getChannelMemberIds(channelId) {
   const cacheKey = `channel:${channelId}:members`;
   const cached = await redisClient.get(cacheKey);
@@ -68,6 +71,47 @@ async function getChannelMemberIds(channelId) {
 async function invalidateChannelMemberCache(channelId) {
   await redisClient.del(`channel:${channelId}:members`);
 }
+
+async function getChannelMember(channelId, userId) {
+  const cacheKey = `channel:${channelId}:member:${userId}`;
+  const cached = await redisClient.get(cacheKey);
+  if (cached) return true;
+
+  const member = await ChannelMember.findOne({
+    where: { channel_id: channelId, user_id: userId }
+  });
+  if (!member) return false;
+
+  await redisClient.set(cacheKey, 1, { EX: MEMBER_CACHE_TTL });
+  return true;
+}
+
+async function invalidateChannelMember(channelId, userId) {
+  await redisClient.del(`channel:${channelId}:member:${userId}`);
+}
+
+
+async function getMessage(id) {
+  const cacheKey = `message:${id}`;
+  const cached = await redisClient.get(cacheKey);
+  if (cached) {
+    let msg = JSON.parse(cached);
+    // Convert string to Date
+    msg.createdAt = new Date(msg.createdAt);
+    return msg;
+  }
+
+  const msg = await Message.findOne({
+    where: { id }
+  });
+  if (msg) return msg;
+  return false;
+}
+
+async function invalidateMessageCache(id) {
+  await redisClient.del(`message:${id}`);
+}
+
 
 async function getConversationParticipantIds(conversationId) {
   const cacheKey = `conv:${conversationId}:members`;
@@ -206,10 +250,7 @@ router.post('/', async (req, res, next) => {
     }
 
     if (channelId) {
-      const member = await ChannelMember.findOne({
-        where: { channel_id: channelId, user_id: req.user.id },
-      });
-      if (!member) return res.status(403).json({ error: 'Not a channel member' });
+      if (!(await getChannelMember(channelId, req.user.id))) return res.status(403).json({ error: 'Not a channel member' });
 
       const msg = await Message.create({
         channel_id: channelId,
@@ -220,6 +261,8 @@ router.post('/', async (req, res, next) => {
       // Attach author from session instead of re-fetching from DB
       msg.author = { id: req.user.id, username: req.user.username, display_name: req.user.display_name };
       const serialized = serializeChannelMessage(msg);
+
+      await redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL });
 
       // Respond immediately, then broadcast asynchronously
       res.status(201).json(serialized);
@@ -250,6 +293,8 @@ router.post('/', async (req, res, next) => {
         ...(attachments ? { attachments } : {}),
       });
       const serialized = serializeConversationMessage(msg);
+
+      await redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL });
 
       // Respond immediately, then broadcast asynchronously
       res.status(201).json(serialized);
@@ -326,6 +371,8 @@ router.patch('/:messageId', async (req, res, next) => {
     msg.edited_at = new Date();
     await msg.save();
 
+    await invalidateMessageCache(msg.id);
+
     if (msg.channel_id) {
       const full = await Message.findByPk(msg.id, {
         include: [{ model: User, as: 'author', attributes: ['id', 'username', 'display_name'] }],
@@ -382,6 +429,8 @@ router.delete('/:messageId', async (req, res, next) => {
 
     await msg.destroy();
 
+    await invalidateMessageCache(msg.id);
+
     if (channelId) {
       const memberIds = await getChannelMemberIds(channelId);
       broadcastToUsers(memberIds, {
@@ -403,4 +452,8 @@ router.delete('/:messageId', async (req, res, next) => {
 
 module.exports = router;
 module.exports.invalidateChannelMemberCache = invalidateChannelMemberCache;
+module.exports.getChannelMember = getChannelMember;
+module.exports.invalidateChannelMember = invalidateChannelMember;
 module.exports.invalidateConversationMemberCache = invalidateConversationMemberCache;
+module.exports.getMessage = getMessage;
+module.exports.invalidateMessageCache = invalidateMessageCache;

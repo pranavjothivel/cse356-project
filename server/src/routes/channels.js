@@ -3,7 +3,7 @@ const { Channel, ChannelMember, CommunityMember, Community, User } = require('..
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
-const { invalidateChannelMemberCache } = require('./messages');
+const { invalidateChannelMemberCache, invalidateChannelMember, getMessage } = require('./messages');
 
 const router = Router();
 
@@ -128,23 +128,22 @@ router.post('/:channelId/leave', async (req, res, next) => {
 
     await member.destroy();
     await invalidateChannelMemberCache(req.params.channelId);
+    await invalidateChannelMember(req.params.channelId, req.user.id);
     res.json({ message: 'Left channel' });
   } catch (err) { next(err); }
 });
 
 // POST /:channelId/read — Mark channel as read up to a message
-router.post('/:channelId/read', requireChannelMember, async (req, res, next) => {
+router.post('/:channelId/read', async (req, res, next) => {
   try {
     const { messageId } = req.body;
     if (!messageId) return res.status(400).json({ error: 'messageId is required' });
 
-    const msg = await Message.findOne({
-      where: { id: messageId, channel_id: req.channel.id },
-    });
+    const msg = await getMessage(messageId);
     if (!msg) return res.status(404).json({ error: 'Message not found in this channel' });
 
     const member = await ChannelMember.findOne({
-      where: { channel_id: req.channel.id, user_id: req.user.id },
+      where: { channel_id: req.params.channelId, user_id: req.user.id },
     });
     if (!member) return res.status(403).json({ error: 'Not a channel member' });
 
@@ -159,7 +158,7 @@ router.post('/:channelId/read', requireChannelMember, async (req, res, next) => 
     // Tell only this user's sessions that this channel is now read
     broadcastToUsers([req.user.id], {
       type: 'channel.read',
-      channelId: req.channel.id,
+      channelId: req.params.channelId,
       lastReadMessageId: messageId,
     });
 

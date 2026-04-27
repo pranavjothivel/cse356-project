@@ -1,4 +1,5 @@
 const Message = require('../models/Message');
+const { getMessage } = require('../routes/messages');
 
 /**
  * Decide whether advancing a user's last-read pointer from `currentId` to
@@ -14,7 +15,7 @@ const Message = require('../models/Message');
  */
 async function isForwardRead(currentId, newMsg) {
   if (!currentId) return true;
-  const current = await Message.findByPk(currentId, { attributes: ['id', 'createdAt'] });
+  const current = await getMessage(currentId);
   if (!current || !current.createdAt || !newMsg.createdAt) return true;
 
   const curTs = current.createdAt.getTime();
