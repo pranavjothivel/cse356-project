@@ -17,7 +17,7 @@ const http = require('http');
 // http.ServerResponse.prototype.setMaxListeners(25);
 const WebSocket = require('ws');
 
-const sequelize = require('./db');
+const { sequelize, searchSequelize } = require('./db');
 require('./models'); // register all models + associations
 const { passport, setupOidcStrategy } = require('./auth/passport');
 const authRouter = require('./routes/auth');
@@ -193,6 +193,7 @@ process.on('uncaughtException', (err) => {
 // ──────────────────────────────────────────────
 async function start() {
   await sequelize.authenticate();
+  await searchSequelize.authenticate();
   console.log('PostgreSQL connected');
 
   // In dev, alter:true auto-applies model changes for convenience.

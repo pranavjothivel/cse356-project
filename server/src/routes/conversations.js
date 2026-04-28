@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const sequelize = require('../db');
+const { sequelize } = require('../db');
 const Conversation = require('../models/Conversation');
 const ConversationParticipant = require('../models/ConversationParticipant');
 const Message = require('../models/Message');
