@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { QueryTypes } = require('sequelize');
-const sequelize = require('../db');
-
+const { searchSequelize: sequelize } = require('../db');
 // Must match the expression in server/scripts/migrations/0002-messages-fts-index.sql
 // exactly, or the planner will fall back to a seq-scan.
 const FTS_CONFIG = 'simple';

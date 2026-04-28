@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { Op, UniqueConstraintError } = require('sequelize');
-const sequelize = require('../db');
+const { sequelize } = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
 const redisClient = require('../redis');
 const { broadcastToUsers } = require('../ws');

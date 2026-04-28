@@ -1,6 +1,6 @@
 const { DataTypes, Model } = require('sequelize');
 const bcrypt = require('bcrypt');
-const sequelize = require('../db');
+const { sequelize } = require('../db');
 
 class User extends Model {
   async verifyPassword(password) {
