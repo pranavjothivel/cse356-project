@@ -8,9 +8,9 @@ on:
         required: false
         default: 'manual rolling deploy'
       drain_wait:
-        description: 'Seconds to wait after draining a node (for in-flight requests to finish)'
+        description: 'Max seconds to wait for in-flight requests to drain (poll cap, not a fixed sleep)'
         required: false
-        default: '10'
+        default: '180'
       target_node:
         description: 'Deploy to a single node only (1–4). Leave empty to roll all nodes.'
         required: false
@@ -85,11 +85,57 @@ jobs:
 
       - name: Drain from HAProxy
         run: |
-          echo "Draining $HA_SERVER from HAProxy..."
-          $SSH root@$LB \
-            "echo 'set server app_servers/$HA_SERVER state drain' | socat stdio /run/haproxy/admin.sock"
-          echo "Waiting ${DRAIN_WAIT}s for in-flight requests..."
-          sleep "$DRAIN_WAIT"
+          # Run drain + poll inside a single SSH session on the LB. The LB's
+          # sshd listen backlog is the openssh default of 128, and the LB's
+          # HAProxy threads run hot under load; that combo causes intermittent
+          # SYN-queue overflow → kernel RST → "Connection reset by peer" on
+          # ssh root@LB. Retry up to 5 times with backoff to ride those out.
+          echo "Draining $HA_SERVER (cap ${DRAIN_WAIT}s, exit early on scur≤5 or scur stable for 3 polls)..."
+          SCRIPT=$(cat <<'REMOTE'
+          set -eu
+          HA="$1"; CAP="$2"
+          sock=/run/haproxy/admin.sock
+          echo "set server app_servers/$HA state drain" | socat stdio "$sock"
+          deadline=$(( $(date +%s) + CAP ))
+          prev=-1
+          stable=0
+          while :; do
+            scur=$(echo 'show stat' | socat stdio "$sock" \
+              | awk -F, -v s="$HA" '$1=="app_servers" && $2==s {print $5; exit}')
+            scur=${scur:-0}
+            now=$(date +%s)
+            echo "  scur=$scur (deadline in $(( deadline - now ))s)"
+            if [ "$scur" -le 5 ]; then
+              echo "Drained ($scur active sessions)."
+              exit 0
+            fi
+            if [ "$scur" -eq "$prev" ]; then
+              stable=$(( stable + 1 ))
+              if [ "$stable" -ge 3 ]; then
+                echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
+                exit 0
+              fi
+            else
+              stable=0
+            fi
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
+              exit 0
+            fi
+            prev=$scur
+            sleep 2
+          done
+          REMOTE
+          )
+          for attempt in 1 2 3 4 5; do
+            if $SSH -o ConnectTimeout=10 root@$LB "bash -s '$HA_SERVER' '$DRAIN_WAIT'" <<<"$SCRIPT"; then
+              exit 0
+            fi
+            echo "::warning::ssh root@LB drain failed (attempt $attempt/5) — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::ssh root@LB drain failed after 5 attempts"
+          exit 1
 
       - name: Snapshot for rollback
         if: ${{ matrix.node.is_first }}
@@ -242,8 +288,18 @@ jobs:
         if: always()
         run: |
           echo "Re-enabling $HA_SERVER in HAProxy..."
-          $SSH root@$LB \
-            "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"
+          # Same retry as the drain step — the LB's sshd accept queue can
+          # overflow under autograder load and produce a transient RST.
+          for attempt in 1 2 3 4 5; do
+            if $SSH -o ConnectTimeout=10 root@$LB \
+                "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"; then
+              exit 0
+            fi
+            echo "::warning::ssh root@LB re-enable failed (attempt $attempt/5) — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::ssh root@LB re-enable failed after 5 attempts — node may be stranded in DRAIN!"
+          exit 1
 
       - name: Configure PgBouncer
         if: always()
@@ -351,9 +407,18 @@ jobs:
       - name: Deploy frontend to LB node
         if: steps.fe.outputs.exists == 'true'
         run: |
-          rsync -az --delete \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/
+          # Retry: same LB-side accept-queue-overflow risk as the drain step.
+          for attempt in 1 2 3 4 5; do
+            if rsync -az --delete \
+                -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10" \
+                client/dist/ root@${{ needs.setup.outputs.lb }}:/srv/frontend/dist/; then
+              exit 0
+            fi
+            echo "::warning::rsync to LB failed (attempt $attempt/5) — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::rsync to LB failed after 5 attempts"
+          exit 1
 
   deploy-lb-configs:
     name: Deploy LB configs (HAProxy + Nginx)
@@ -388,24 +453,42 @@ jobs:
 
       - name: Push HAProxy config
         if: steps.changes.outputs.haproxy == 'true'
+        env:
+          LB: ${{ needs.setup.outputs.lb }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            infra/haproxy/haproxy.cfg \
-            root@${{ needs.setup.outputs.lb }}:/etc/haproxy/haproxy.cfg
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            root@${{ needs.setup.outputs.lb }} \
-            "haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy"
+          # Retry: same LB-side accept-queue-overflow risk as the drain step.
+          retry() {
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              echo "::warning::$1 to LB failed (attempt $attempt/5) — retrying in 5s..."
+              sleep 5
+            done
+            echo "::error::$1 to LB failed after 5 attempts"
+            return 1
+          }
+          retry scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+            infra/haproxy/haproxy.cfg root@$LB:/etc/haproxy/haproxy.cfg
+          retry ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+            root@$LB "haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy"
 
       - name: Push Nginx config
         if: steps.changes.outputs.nginx == 'true'
+        env:
+          LB: ${{ needs.setup.outputs.lb }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            infra/nginx/nginx.conf \
-            root@${{ needs.setup.outputs.lb }}:/etc/nginx/nginx.conf
-          rsync -az \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            infra/nginx/sites-enabled/ \
-            root@${{ needs.setup.outputs.lb }}:/etc/nginx/sites-enabled/
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            root@${{ needs.setup.outputs.lb }} \
-            "nginx -t && systemctl reload nginx"
+          retry() {
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              echo "::warning::$1 to LB failed (attempt $attempt/5) — retrying in 5s..."
+              sleep 5
+            done
+            echo "::error::$1 to LB failed after 5 attempts"
+            return 1
+          }
+          retry scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+            infra/nginx/nginx.conf root@$LB:/etc/nginx/nginx.conf
+          retry rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10" \
+            infra/nginx/sites-enabled/ root@$LB:/etc/nginx/sites-enabled/
+          retry ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+            root@$LB "nginx -t && systemctl reload nginx"
