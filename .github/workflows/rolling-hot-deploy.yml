@@ -10,7 +10,7 @@ on:
       drain_wait:
         description: 'Max seconds to wait for in-flight requests to drain (poll cap, not a fixed sleep)'
         required: false
-        default: '60'
+        default: '180'
       target_node:
         description: 'Deploy to a single node only (1–4). Leave empty to roll all nodes.'
         required: false
@@ -89,12 +89,16 @@ jobs:
           $SSH root@$LB \
             "echo 'set server app_servers/$HA_SERVER state drain' | socat stdio /run/haproxy/admin.sock"
 
-          # Poll scur (active sessions on this backend server) until it drops
-          # to ≤5 or we hit DRAIN_WAIT seconds. Replaces a fixed sleep — the
-          # fixed sleep wasn't long enough under load and let pm2 reload land
-          # while ~125 sessions were still in flight, which produced 503s.
+          # Poll scur (active sessions on this backend server) until either
+          # it drops to ≤5, it stays unchanged across 3 consecutive polls
+          # (≈6s — what's left is persistent /ws connections that won't
+          # terminate during drain), or we hit DRAIN_WAIT seconds. Replaces
+          # a fixed sleep that wasn't long enough under load and let pm2
+          # reload land while ~125 sessions were still in flight → 503s.
           echo "Polling scur for $HA_SERVER (cap ${DRAIN_WAIT}s)..."
           deadline=$(( $(date +%s) + DRAIN_WAIT ))
+          prev=-1
+          stable=0
           while :; do
             scur=$($SSH root@$LB \
               "echo 'show stat' | socat stdio /run/haproxy/admin.sock" \
@@ -106,10 +110,20 @@ jobs:
               echo "Drained ($scur active sessions)."
               break
             fi
+            if [ "$scur" -eq "$prev" ]; then
+              stable=$(( stable + 1 ))
+              if [ "$stable" -ge 3 ]; then
+                echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
+                break
+              fi
+            else
+              stable=0
+            fi
             if [ "$now" -ge "$deadline" ]; then
               echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
               break
             fi
+            prev=$scur
             sleep 2
           done
 
