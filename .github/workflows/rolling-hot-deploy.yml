@@ -85,47 +85,46 @@ jobs:
 
       - name: Drain from HAProxy
         run: |
-          echo "Draining $HA_SERVER from HAProxy..."
-          $SSH root@$LB \
-            "echo 'set server app_servers/$HA_SERVER state drain' | socat stdio /run/haproxy/admin.sock"
-
-          # Poll scur (active sessions on this backend server) until either
-          # it drops to ≤5, it stays unchanged across 3 consecutive polls
-          # (≈6s — what's left is persistent /ws connections that won't
-          # terminate during drain), or we hit DRAIN_WAIT seconds. Replaces
-          # a fixed sleep that wasn't long enough under load and let pm2
-          # reload land while ~125 sessions were still in flight → 503s.
-          echo "Polling scur for $HA_SERVER (cap ${DRAIN_WAIT}s)..."
-          deadline=$(( $(date +%s) + DRAIN_WAIT ))
-          prev=-1
-          stable=0
-          while :; do
-            scur=$($SSH root@$LB \
-              "echo 'show stat' | socat stdio /run/haproxy/admin.sock" \
-              | awk -F, -v s="$HA_SERVER" '$1=="app_servers" && $2==s {print $5; exit}')
-            scur=${scur:-0}
-            now=$(date +%s)
-            echo "  scur=$scur (deadline in $(( deadline - now ))s)"
-            if [ "$scur" -le 5 ]; then
-              echo "Drained ($scur active sessions)."
-              break
-            fi
-            if [ "$scur" -eq "$prev" ]; then
-              stable=$(( stable + 1 ))
-              if [ "$stable" -ge 3 ]; then
-                echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
-                break
+          # Run drain + poll inside a single SSH session on the LB. A poll
+          # loop that opens one SSH per probe at 2s intervals can rack up
+          # 90 connections across the cap and hit sshd's MaxStartups, which
+          # tanks the next ssh root@$LB step (re-enable) with "Connection
+          # reset by peer". Doing the loop on the LB keeps it to one ssh.
+          echo "Draining $HA_SERVER (cap ${DRAIN_WAIT}s, exit early on scur≤5 or scur stable for 3 polls)..."
+          $SSH root@$LB "HA='$HA_SERVER' CAP='$DRAIN_WAIT' bash -s" <<'REMOTE'
+            set -eu
+            sock=/run/haproxy/admin.sock
+            echo "set server app_servers/$HA state drain" | socat stdio "$sock"
+            deadline=$(( $(date +%s) + CAP ))
+            prev=-1
+            stable=0
+            while :; do
+              scur=$(echo 'show stat' | socat stdio "$sock" \
+                | awk -F, -v s="$HA" '$1=="app_servers" && $2==s {print $5; exit}')
+              scur=${scur:-0}
+              now=$(date +%s)
+              echo "  scur=$scur (deadline in $(( deadline - now ))s)"
+              if [ "$scur" -le 5 ]; then
+                echo "Drained ($scur active sessions)."
+                exit 0
               fi
-            else
-              stable=0
-            fi
-            if [ "$now" -ge "$deadline" ]; then
-              echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
-              break
-            fi
-            prev=$scur
-            sleep 2
-          done
+              if [ "$scur" -eq "$prev" ]; then
+                stable=$(( stable + 1 ))
+                if [ "$stable" -ge 3 ]; then
+                  echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
+                  exit 0
+                fi
+              else
+                stable=0
+              fi
+              if [ "$now" -ge "$deadline" ]; then
+                echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
+                exit 0
+              fi
+              prev=$scur
+              sleep 2
+            done
+          REMOTE
 
       - name: Snapshot for rollback
         if: ${{ matrix.node.is_first }}
