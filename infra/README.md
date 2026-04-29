@@ -24,3 +24,7 @@ All nodes are Linodes on the CSE356 course cluster (Clanode 4G unless noted).
 - [`haproxy/haproxy.cfg`](haproxy/haproxy.cfg) — HAProxy config deployed to `group1-web-lb01`
 - [`nginx/nginx.conf`](nginx/nginx.conf) — Nginx config deployed to `group1-web-lb01`
 - [`nginx/sites-enabled/frontend`](nginx/sites-enabled/frontend) — Nginx virtual host serving the built React frontend on `127.0.0.1:8080`
+
+## Adding a New API Node
+
+Full runbook: [`docs/api-node-bootstrap.md`](../docs/api-node-bootstrap.md). Covers `scripts/setup-node.sh`, PgBouncer install, Grafana Alloy install + config mirror, the required edits to `nodes.yml`/`haproxy.cfg`/this README, and the deploy/verification steps.
