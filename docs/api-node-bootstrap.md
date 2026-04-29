@@ -12,6 +12,12 @@ End-to-end runbook for adding an app node to the cluster. Captures everything th
 - Local SSH key for `root@<node>`: `~/.ssh/id_ed25519_356_clanode_prod` (matches `infra/pgbouncer/provision.sh`)
 - Local SSH key matching the `SSH_PRIVATE_KEY` GitHub secret — the public half of this is what the deploy pipeline uses to reach the `deploy` user
 - `gh` CLI authenticated for this repo
+- Set the seed-node and new-node IPs once at the top of your shell session — every command below references these:
+
+  ```bash
+  export SEED_NODE=130.245.136.217   # any healthy existing API node (01..0N) we mirror config from
+  export NEW_NODE=<NEW_PUBLIC_IP>    # the new Linode's public IP
+  ```
 
 ---
 
@@ -19,7 +25,7 @@ End-to-end runbook for adding an app node to the cluster. Captures everything th
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_356_clanode_prod -o ConnectTimeout=5 \
-    root@<NEW_PUBLIC_IP> 'uname -a && nproc'
+    root@$NEW_NODE 'uname -a && nproc'
 ```
 
 Confirm Ubuntu 22.04 and the expected vCPU count.
@@ -32,23 +38,23 @@ Creates the `deploy` user, installs Node 22 LTS + PM2, and wires up the PM2 syst
 
 ```bash
 DEPLOY_PUBKEY=$(ssh -i ~/.ssh/id_ed25519_356_clanode_prod \
-                  root@130.245.136.217 'cat /home/deploy/.ssh/authorized_keys')
+                  root@$SEED_NODE 'cat /home/deploy/.ssh/authorized_keys')
 
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
     "bash -s -- '$DEPLOY_PUBKEY'" < scripts/setup-node.sh
 ```
 
 > **Known quirk:** `setup-node.sh` ends with a `pm2 startup` step that occasionally exits non-zero when run non-interactively (PM2 emits `EACCES` warnings spawning the daemon without a TTY, which `set -euo pipefail` may catch). If the script bails after PM2 install, finish manually:
 >
 > ```bash
-> ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+> ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
 >   'env PATH=$PATH:/usr/bin pm2 startup systemd -u deploy --hp /home/deploy'
 > ```
 
 Verify:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
   'id deploy && node -v && systemctl is-enabled pm2-deploy'
 ```
 
@@ -59,7 +65,7 @@ ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
 Just the package — `/etc/pgbouncer/pgbouncer.ini` and `userlist.txt` are templated by the deploy workflow's "Configure PgBouncer" step from `PG_DIRECT_URL` in the `ENV_FILE` secret.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
   'apt-get update -qq && apt-get install -y -qq pgbouncer && systemctl enable pgbouncer'
 ```
 
@@ -72,7 +78,7 @@ Service may fail to start until the deploy job writes the config — that's expe
 We install Alloy directly from the Grafana apt repo (no need for the Grafana Cloud onboarding script — we'll mirror an existing API node's config rather than start from the script's defaults, so we don't need to re-inject the API key).
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> 'bash -s' <<'EOF'
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE 'bash -s' <<'EOF'
 set -euo pipefail
 mkdir -p /etc/apt/keyrings
 wget -qO - https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
@@ -87,8 +93,8 @@ EOF
 Then mirror an existing API node's config (it uses `constants.hostname` for every `instance` label, so each node ships under its own hostname — see [`grafana-alloy-api-node.md`](grafana-alloy-api-node.md)):
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@130.245.136.217 'cat /etc/alloy/config.alloy' \
-  | ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$SEED_NODE 'cat /etc/alloy/config.alloy' \
+  | ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
       'cat > /etc/alloy/config.alloy
        chown root:alloy /etc/alloy/config.alloy
        chmod 640 /etc/alloy/config.alloy
@@ -98,7 +104,7 @@ ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@130.245.136.217 'cat /etc/alloy/c
 Verify samples are flowing:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@<NEW_PUBLIC_IP> \
+ssh -i ~/.ssh/id_ed25519_356_clanode_prod root@$NEW_NODE \
   'sleep 8; curl -s http://127.0.0.1:12345/metrics \
     | grep "^prometheus_remote_storage_samples_total"'
 ```
@@ -124,7 +130,7 @@ Append the new node. The `setup` job in deploy workflows derives the HAProxy ser
 ### `infra/haproxy/haproxy.cfg`
 Add a `server` line in the `app_servers` backend. **Weight = vCPU count** (PM2 uses one worker per vCPU; RAM/vCPU is uniform at ~2 GB/core across all nodes, so vCPU also tracks memory headroom).
 
-```
+```txt
 server nodeXX <PRIVATE_IP>:3000 check weight <vcpu_count>
 ```
 
