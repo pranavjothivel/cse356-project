@@ -8,9 +8,9 @@ on:
         required: false
         default: 'manual rolling deploy'
       drain_wait:
-        description: 'Seconds to wait after draining a node (for in-flight requests to finish)'
+        description: 'Max seconds to wait for in-flight requests to drain (poll cap, not a fixed sleep)'
         required: false
-        default: '10'
+        default: '60'
       target_node:
         description: 'Deploy to a single node only (1–4). Leave empty to roll all nodes.'
         required: false
@@ -88,8 +88,30 @@ jobs:
           echo "Draining $HA_SERVER from HAProxy..."
           $SSH root@$LB \
             "echo 'set server app_servers/$HA_SERVER state drain' | socat stdio /run/haproxy/admin.sock"
-          echo "Waiting ${DRAIN_WAIT}s for in-flight requests..."
-          sleep "$DRAIN_WAIT"
+
+          # Poll scur (active sessions on this backend server) until it drops
+          # to ≤5 or we hit DRAIN_WAIT seconds. Replaces a fixed sleep — the
+          # fixed sleep wasn't long enough under load and let pm2 reload land
+          # while ~125 sessions were still in flight, which produced 503s.
+          echo "Polling scur for $HA_SERVER (cap ${DRAIN_WAIT}s)..."
+          deadline=$(( $(date +%s) + DRAIN_WAIT ))
+          while :; do
+            scur=$($SSH root@$LB \
+              "echo 'show stat' | socat stdio /run/haproxy/admin.sock" \
+              | awk -F, -v s="$HA_SERVER" '$1=="app_servers" && $2==s {print $5; exit}')
+            scur=${scur:-0}
+            now=$(date +%s)
+            echo "  scur=$scur (deadline in $(( deadline - now ))s)"
+            if [ "$scur" -le 5 ]; then
+              echo "Drained ($scur active sessions)."
+              break
+            fi
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
+              break
+            fi
+            sleep 2
+          done
 
       - name: Snapshot for rollback
         if: ${{ matrix.node.is_first }}
