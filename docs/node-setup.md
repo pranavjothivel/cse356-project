@@ -1,5 +1,7 @@
 # App Node Setup
 
+> **For adding a new node from scratch, follow [`api-node-bootstrap.md`](api-node-bootstrap.md)** — this page covers only the `setup-node.sh` step (deploy user + Node + PM2). The bootstrap doc additionally covers PgBouncer, Grafana Alloy, the repo edits, and the deploy run.
+
 Run once on each app node as a user with sudo. Pass the public key that corresponds to your `SSH_PRIVATE_KEY` GitHub secret.
 
 ```bash

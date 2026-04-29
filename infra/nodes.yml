@@ -14,7 +14,11 @@ app_nodes:
   - name: group1-api-node-04
     ip: 130.245.136.223
     private_ip: 10.0.3.44
-    type: 1vcpu-2gb
+    type: 2vcpu-4gb
+  - name: group1-api-node-05
+    ip: 130.245.136.72
+    private_ip: 10.0.3.79
+    type: 8vcpu-16gb
 
 lb_node: 130.245.136.254
 telemetry_node: 130.245.136.96
