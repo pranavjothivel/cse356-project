@@ -38,7 +38,8 @@ app.set('trust proxy', 1);
 
 
 /**
- * route -> { reqs (number of requests), sumResponse (sum of response times) }
+ * route -> { reqs (number of requests), sumResponse (sum of response times), 
+ * last500BatchSum, current500BatchSum, current500Batch (these average response times in batches of 500)}
  */
 let metrics = new Map();
 
@@ -52,10 +53,18 @@ app.use((req, res, next) => {
       let date2 = Date.now();
       let metric = metrics.get(route);
       if (!metric) {
-        metric = {reqs: 0, sumResponse: 0}
+        metric = {reqs: 0, sumResponse: 0, last500Sum: 0, current500Sum: 0, current500: 0}
       }
+      let resTime = date2 - date1;
       metric.reqs++;
-      metric.sumResponse += date2 - date1;
+      metric.sumResponse += resTime;
+      metric.current500Sum += resTime;
+      metric.current500++;
+      if (metric.current500 === 500) {
+        metric.current500 = 0;
+        metric.last500Sum = metric.current500Sum;
+        metric.current500Sum = 0;
+      }
       metrics.set(route, metric);
     }
     catch (err) {}
@@ -76,7 +85,7 @@ app.get('/api/metrics', (req, res, next) => {
 
     let html = '';
     metricsArray.forEach((v) => {
-      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}</p>`;
+      html += `<p>${v[0]}: Requests: ${v[1].reqs}, Average: ${(v[1].sumResponse / v[1].reqs).toFixed(3)}, Last 500 Average: ${(v[1].last500Sum / 500).toFixed(3)}</p>`;
     });
     return res.send(html);
   }
