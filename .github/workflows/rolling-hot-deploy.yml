@@ -85,46 +85,57 @@ jobs:
 
       - name: Drain from HAProxy
         run: |
-          # Run drain + poll inside a single SSH session on the LB. A poll
-          # loop that opens one SSH per probe at 2s intervals can rack up
-          # 90 connections across the cap and hit sshd's MaxStartups, which
-          # tanks the next ssh root@$LB step (re-enable) with "Connection
-          # reset by peer". Doing the loop on the LB keeps it to one ssh.
+          # Run drain + poll inside a single SSH session on the LB. The LB's
+          # sshd listen backlog is the openssh default of 128, and the LB's
+          # HAProxy threads run hot under load; that combo causes intermittent
+          # SYN-queue overflow → kernel RST → "Connection reset by peer" on
+          # ssh root@LB. Retry up to 5 times with backoff to ride those out.
           echo "Draining $HA_SERVER (cap ${DRAIN_WAIT}s, exit early on scur≤5 or scur stable for 3 polls)..."
-          $SSH root@$LB "HA='$HA_SERVER' CAP='$DRAIN_WAIT' bash -s" <<'REMOTE'
-            set -eu
-            sock=/run/haproxy/admin.sock
-            echo "set server app_servers/$HA state drain" | socat stdio "$sock"
-            deadline=$(( $(date +%s) + CAP ))
-            prev=-1
-            stable=0
-            while :; do
-              scur=$(echo 'show stat' | socat stdio "$sock" \
-                | awk -F, -v s="$HA" '$1=="app_servers" && $2==s {print $5; exit}')
-              scur=${scur:-0}
-              now=$(date +%s)
-              echo "  scur=$scur (deadline in $(( deadline - now ))s)"
-              if [ "$scur" -le 5 ]; then
-                echo "Drained ($scur active sessions)."
+          SCRIPT=$(cat <<'REMOTE'
+          set -eu
+          HA="$1"; CAP="$2"
+          sock=/run/haproxy/admin.sock
+          echo "set server app_servers/$HA state drain" | socat stdio "$sock"
+          deadline=$(( $(date +%s) + CAP ))
+          prev=-1
+          stable=0
+          while :; do
+            scur=$(echo 'show stat' | socat stdio "$sock" \
+              | awk -F, -v s="$HA" '$1=="app_servers" && $2==s {print $5; exit}')
+            scur=${scur:-0}
+            now=$(date +%s)
+            echo "  scur=$scur (deadline in $(( deadline - now ))s)"
+            if [ "$scur" -le 5 ]; then
+              echo "Drained ($scur active sessions)."
+              exit 0
+            fi
+            if [ "$scur" -eq "$prev" ]; then
+              stable=$(( stable + 1 ))
+              if [ "$stable" -ge 3 ]; then
+                echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
                 exit 0
               fi
-              if [ "$scur" -eq "$prev" ]; then
-                stable=$(( stable + 1 ))
-                if [ "$stable" -ge 3 ]; then
-                  echo "scur stable at $scur for 3 polls — likely persistent /ws connections; proceeding."
-                  exit 0
-                fi
-              else
-                stable=0
-              fi
-              if [ "$now" -ge "$deadline" ]; then
-                echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
-                exit 0
-              fi
-              prev=$scur
-              sleep 2
-            done
+            else
+              stable=0
+            fi
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::warning::Drain cap reached with scur=$scur — proceeding anyway"
+              exit 0
+            fi
+            prev=$scur
+            sleep 2
+          done
           REMOTE
+          )
+          for attempt in 1 2 3 4 5; do
+            if $SSH -o ConnectTimeout=10 root@$LB "bash -s '$HA_SERVER' '$DRAIN_WAIT'" <<<"$SCRIPT"; then
+              exit 0
+            fi
+            echo "::warning::ssh root@LB drain failed (attempt $attempt/5) — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::ssh root@LB drain failed after 5 attempts"
+          exit 1
 
       - name: Snapshot for rollback
         if: ${{ matrix.node.is_first }}
@@ -277,8 +288,18 @@ jobs:
         if: always()
         run: |
           echo "Re-enabling $HA_SERVER in HAProxy..."
-          $SSH root@$LB \
-            "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"
+          # Same retry as the drain step — the LB's sshd accept queue can
+          # overflow under autograder load and produce a transient RST.
+          for attempt in 1 2 3 4 5; do
+            if $SSH -o ConnectTimeout=10 root@$LB \
+                "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"; then
+              exit 0
+            fi
+            echo "::warning::ssh root@LB re-enable failed (attempt $attempt/5) — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::ssh root@LB re-enable failed after 5 attempts — node may be stranded in DRAIN!"
+          exit 1
 
       - name: Configure PgBouncer
         if: always()
