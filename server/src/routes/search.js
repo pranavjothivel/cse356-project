@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { QueryTypes } = require('sequelize');
 const { searchSequelize: sequelize } = require('../db');
-// Must match the expression in server/scripts/migrations/0002-messages-fts-index.sql
-// exactly, or the planner will fall back to a seq-scan.
+// Must match the expression in server/scripts/migrations/0005-messages-fts-index-simple.sql
+// exactly (regconfig included), or the planner will fall back to a seq-scan.
 const FTS_CONFIG = 'simple';
 
 function requireAuth(req, res, next) {
@@ -58,10 +58,16 @@ router.get('/', requireAuth, async (req, res, next) => {
         return res.status(403).json({ error: 'Not a member of this community' });
       }
 
-      // Accessible channels: public ones + private ones the user has joined
+      // Accessible channels: public ones + private ones the user has joined.
+      // The subquery is wrapped in `= ANY(ARRAY(...))` so the planner runs it once
+      // as an InitPlan and folds the channel filter into the FTS bitmap heap recheck.
+      // Without this, `m.channel_id IN (subquery)` plans as a nested loop join — the
+      // planner underestimates FTS selectivity (multi-token tsvector stats are
+      // unreliable) and ends up scanning tens of thousands of FTS hits to find a
+      // few hundred in-scope rows. See issue #158.
       bindings.push(communityId);
       scopeClause = `
-        m.channel_id IN (
+        m.channel_id = ANY(ARRAY(
           SELECT c.id FROM channels c
           WHERE c.community_id = $3
             AND (
@@ -71,7 +77,7 @@ router.get('/', requireAuth, async (req, res, next) => {
                 WHERE cm.channel_id = c.id AND cm.user_id = $2
               )
             )
-        )
+        ))
       `;
     } else if (effectiveScope === 'conversation') {
       if (!conversationId) {
@@ -91,10 +97,12 @@ router.get('/', requireAuth, async (req, res, next) => {
       scopeClause = `m.conversation_id = $3`;
     } else {
       // No scope — global search across all content the user can access:
-      // channels in communities they belong to (public + joined private) + their conversations
+      // channels in communities they belong to (public + joined private) + their conversations.
+      // Uses = ANY(ARRAY(...)) for both subqueries so they run as InitPlans once each
+      // and fold into the FTS bitmap heap recheck. See issue #158.
       scopeClause = `
         (
-          m.channel_id IN (
+          m.channel_id = ANY(ARRAY(
             SELECT c.id FROM channels c
             JOIN community_members cm2 ON cm2.community_id = c.community_id AND cm2.user_id = $2
             WHERE c.is_private = false
@@ -102,10 +110,10 @@ router.get('/', requireAuth, async (req, res, next) => {
                 SELECT 1 FROM channel_members chm
                 WHERE chm.channel_id = c.id AND chm.user_id = $2
               )
-          )
-          OR m.conversation_id IN (
+          ))
+          OR m.conversation_id = ANY(ARRAY(
             SELECT conversation_id FROM conversation_participants WHERE user_id = $2
-          )
+          ))
         )
       `;
     }
