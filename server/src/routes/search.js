@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { QueryTypes } = require('sequelize');
 const { searchSequelize: sequelize } = require('../db');
-// Must match the expression in server/scripts/migrations/0002-messages-fts-index.sql
-// exactly, or the planner will fall back to a seq-scan.
+// Must match the expression in server/scripts/migrations/0005-messages-fts-index-simple.sql
+// exactly (regconfig included), or the planner will fall back to a seq-scan.
 const FTS_CONFIG = 'simple';
 
 function requireAuth(req, res, next) {

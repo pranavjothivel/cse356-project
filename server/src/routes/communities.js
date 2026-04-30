@@ -275,13 +275,24 @@ router.get('/:communityId/members', async (req, res, next) => {
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'display_name', 'avatar'] }],
     });
 
-    // Fetch presence from Redis for each member
-    const members = await Promise.all(memberships.map(async (m) => {
+    // Fetch presence from Redis for all members in a single pipelined round-trip
+    let redisBodies = [];
+    if (memberships.length > 0) {
+      try {
+        const pipeline = redisClient.multi();
+        memberships.forEach(m => pipeline.hGet(`users:${m.user.id}`, 'body'));
+        redisBodies = await pipeline.exec();
+      } catch (_) {
+        redisBodies = [];
+      }
+    }
+
+    const members = memberships.map((m, i) => {
       let presence = 'offline';
       try {
-        const redisBody = await redisClient.hGet(`users:${m.user.id}`, 'body');
-        if (redisBody) {
-          presence = JSON.parse(redisBody).presence || 'offline';
+        const body = redisBodies[i];
+        if (body) {
+          presence = JSON.parse(body).presence || 'offline';
         }
       } catch (_) {}
 
@@ -291,7 +302,7 @@ router.get('/:communityId/members', async (req, res, next) => {
         presence,
         joined_at: m.joined_at,
       };
-    }));
+    });
 
     res.json({ members });
   } catch (err) { next(err); }
