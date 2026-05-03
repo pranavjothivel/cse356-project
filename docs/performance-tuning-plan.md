@@ -20,7 +20,7 @@ The changes below address all three via: dedicated DB pools, multi-client Redis,
 | 1C-0 — node-04 4G + HAProxy weight | **DONE** | `nodes.yml` type label corrected to `2vcpu-4gb` and `haproxy.cfg` `node4` weight=2 as of PR #152. |
 | 1C — PgBouncer tune | **PENDING** | `max_client_conn=200` and `default_pool_size=50` unchanged. No `server_idle_timeout`. (Note: a separate option to drop `default_pool_size` to 35 was discussed during the 2026-04-29 PG capacity review.) |
 | 1D — Postgres `max_connections` | **DONE+** | Bumped 200→**300** on 2026-04-29 (exceeds plan). Same maintenance window also raised `shared_buffers` 128MB→2GB and installed `pg_stat_statements` (not in original plan). |
-| 1E — Node.js GC tuning | **PENDING** | `ecosystem.config.js` has no `node_args`. |
+| 1E — Node.js GC tuning | **DONE** | `node_args: '--max-semi-space-size=8 --max-old-space-size=384'` added to `ecosystem.config.js`. |
 | 1F — Redis mutex config | **PARTIAL** | `timeout=500` (target 2000). `pollingInterval=50` ✓. No `failAfter`. |
 | 2 — Redis multi-client | **PENDING** | `redis.js` still single-client export. |
 | 3A–3E — multi-client importers | **PENDING** | Blocked on Phase 2. |
@@ -94,7 +94,8 @@ module.exports = searchSequelize;
 - Rationale: 4 PgBouncer instances × 25 pool_size = 100 backend connections at peak. 200 gives headroom for admin/monitoring connections and any direct connections (migrations, psql sessions).
 - Each connection uses ~5-10MB RAM — 200 connections ≈ 1-2GB, well within a 4GB DB node.
 
-### 1E. Node.js GC tuning — **PENDING**
+### 1E. Node.js GC tuning — **DONE**
+> Live: `node_args: '--max-semi-space-size=8 --max-old-space-size=384'` in `ecosystem.config.js`. PM2 cluster reload picks up the new args one worker at a time.
 
 **File:** `server/ecosystem.config.js`
 - Add `node_args: '--max-semi-space-size=8 --max-old-space-size=384'`
