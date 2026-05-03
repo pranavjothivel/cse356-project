@@ -16,7 +16,7 @@ The changes below address all three via: dedicated DB pools, multi-client Redis,
 | Item | Status | Notes |
 |---|---|---|
 | 1A — search DB pool | **DONE** (diverged) | Implemented as named export in `db.js`, not new `db-search.js`. `pool.max=6` (plan said 5). `statement_timeout` not added. |
-| 1B — main DB pool tune | **PARTIAL** | `pool.max=14` (target 20). `acquire=30000` (target 15000). No `statement_timeout`. |
+| 1B — main DB pool tune | **DONE** | `pool.max=20`, `pool.acquire=15000`, `statement_timeout=10000` on main pool only (search pool unchanged). |
 | 1C-0 — node-04 4G + HAProxy weight | **DONE** | `nodes.yml` type label corrected to `2vcpu-4gb` and `haproxy.cfg` `node4` weight=2 as of PR #152. |
 | 1C — PgBouncer tune | **PENDING** | `max_client_conn=200` and `default_pool_size=50` unchanged. No `server_idle_timeout`. (Note: a separate option to drop `default_pool_size` to 35 was discussed during the 2026-04-29 PG capacity review.) |
 | 1D — Postgres `max_connections` | **DONE+** | Bumped 200→**300** on 2026-04-29 (exceeds plan). Same maintenance window also raised `shared_buffers` 128MB→2GB and installed `pg_stat_statements` (not in original plan). |
@@ -60,8 +60,8 @@ const searchSequelize = new Sequelize(process.env.DATABASE_URL, {
 module.exports = searchSequelize;
 ```
 
-### 1B. Tune main DB pool — **PARTIAL**
-> `pool.max=14` live (target 20). `acquire=30000` unchanged (target 15000). `statement_timeout` not added.
+### 1B. Tune main DB pool — **DONE**
+> Live: `pool.max=20`, `pool.acquire=15000`, `dialectOptions.statement_timeout=10000` on main pool only. Search pool's `dialectOptions` split off so adding the main-pool timeout doesn't accidentally clamp FTS queries.
 
 **File:** `server/src/db.js`
 - `pool.max`: 10 → **20**
