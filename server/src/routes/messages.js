@@ -262,10 +262,12 @@ router.post('/', async (req, res, next) => {
       msg.author = { id: req.user.id, username: req.user.username, display_name: req.user.display_name };
       const serialized = serializeChannelMessage(msg);
 
-      await redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL });
-
-      // Respond immediately, then broadcast asynchronously
+      // Respond immediately, then cache + broadcast asynchronously
       res.status(201).json(serialized);
+
+      // Fire-and-forget cache write — don't block the response on Redis.
+      redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
+        .catch(err => console.warn('message cache set failed:', err.message));
 
       // Fire-and-forget: broadcast to other users via WebSocket
       getChannelMemberIds(channelId).then(memberIds => {
@@ -294,10 +296,12 @@ router.post('/', async (req, res, next) => {
       });
       const serialized = serializeConversationMessage(msg);
 
-      await redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL });
-
-      // Respond immediately, then broadcast asynchronously
+      // Respond immediately, then cache + broadcast asynchronously
       res.status(201).json(serialized);
+
+      // Fire-and-forget cache write — don't block the response on Redis.
+      redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
+        .catch(err => console.warn('message cache set failed:', err.message));
 
       // Fire-and-forget: un-hide + broadcast
       (async () => {
