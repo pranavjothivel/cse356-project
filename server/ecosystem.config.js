@@ -6,6 +6,10 @@ module.exports = {
       instances: 'max',
       exec_mode: 'cluster',
       env_file: '.env',
+      // Cap old gen at 384MB so V8 triggers a major GC before PM2's
+      // 512MB max_memory_restart kicks in and drops live WS connections.
+      // Smaller young gen keeps minor GC pauses short.
+      node_args: '--max-semi-space-size=8 --max-old-space-size=384',
       kill_timeout: 10000,
       listen_timeout: 5000,
       max_memory_restart: '512M',
