@@ -4,6 +4,9 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const GitHubStrategy = require('passport-github2').Strategy;
 const { Issuer, custom, Strategy: OidcStrategy } = require('openid-client');
 const User = require('../models/User');
+const redisClient = require('../redis');
+
+const USER_CACHE_TTL = 60; // seconds
 
 // Course provider sometimes takes very long to respond, so set timeout to 20 sec instead of 3.5
 custom.setHttpOptionsDefaults({
@@ -16,7 +19,20 @@ passport.serializeUser((user, done) => {
 
 passport.deserializeUser(async (id, done) => {
   try {
+    const cached = await redisClient.get(`user:${id}`);
+    if (cached) {
+      // Rehydrate to a Sequelize instance so callers that mutate via
+      // `req.user.save()` / `req.user.linkProvider()` / `.verifyPassword()`
+      // continue to work transparently. `isNewRecord: false` makes save()
+      // issue an UPDATE on PK rather than INSERT.
+      return done(null, User.build(JSON.parse(cached), { isNewRecord: false }));
+    }
     const user = await User.findByPk(id);
+    if (user) {
+      // Fire-and-forget cache write — don't block the request on Redis.
+      redisClient.set(`user:${id}`, JSON.stringify(user.toJSON()), { EX: USER_CACHE_TTL })
+        .catch(err => console.warn('user cache set failed:', err.message));
+    }
     done(null, user);
   } catch (err) {
     done(err);

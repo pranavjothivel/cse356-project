@@ -1,6 +1,7 @@
 const { DataTypes, Model } = require('sequelize');
 const bcrypt = require('bcrypt');
 const { sequelize } = require('../db');
+const redisClient = require('../redis');
 
 class User extends Model {
   async verifyPassword(password) {
@@ -81,5 +82,17 @@ User.init({
   tableName: 'users',
   underscored: true,
 });
+
+// Invalidate the deserializeUser Redis cache on any user mutation. Mirrors the
+// `user:${id}` key written in passport.js. Fire-and-forget — a stale cache for
+// up to its 60s TTL is acceptable; failing the mutation because Redis is down
+// is not.
+const invalidateUserCache = (instance) => {
+  if (instance && instance.id) {
+    redisClient.del(`user:${instance.id}`).catch(() => {});
+  }
+};
+User.addHook('afterSave', invalidateUserCache);
+User.addHook('afterDestroy', invalidateUserCache);
 
 module.exports = User;
