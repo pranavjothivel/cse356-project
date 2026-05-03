@@ -16,7 +16,7 @@ The changes below address all three via: dedicated DB pools, multi-client Redis,
 | Item | Status | Notes |
 |---|---|---|
 | 1A — search DB pool | **DONE** (diverged) | Implemented as named export in `db.js`, not new `db-search.js`. `pool.max=6` (plan said 5). `statement_timeout` not added. |
-| 1B — main DB pool tune | **PARTIAL** | `pool.max=20`, `pool.acquire=15000` shipped. `statement_timeout` still pending — pgbouncer.ini's `ignore_startup_parameters` needs `statement_timeout` added before the pg client can pass it through (FATAL 08P01 on first attempt). Track separately. |
+| 1B — main DB pool tune | **DONE** | `pool.max=20`, `pool.acquire=15000`, `statement_timeout=10000` on main pool. Pgbouncer's `ignore_startup_parameters` now allows `statement_timeout`; deploy workflow reordered to push pgbouncer config before app reload, with snapshot/rollback symmetric to the existing app-code rollback. |
 | 1C-0 — node-04 4G + HAProxy weight | **DONE** | `nodes.yml` type label corrected to `2vcpu-4gb` and `haproxy.cfg` `node4` weight=2 as of PR #152. |
 | 1C — PgBouncer tune | **PENDING** | `max_client_conn=200` and `default_pool_size=50` unchanged. No `server_idle_timeout`. (Note: a separate option to drop `default_pool_size` to 35 was discussed during the 2026-04-29 PG capacity review.) |
 | 1D — Postgres `max_connections` | **DONE+** | Bumped 200→**300** on 2026-04-29 (exceeds plan). Same maintenance window also raised `shared_buffers` 128MB→2GB and installed `pg_stat_statements` (not in original plan). |
@@ -60,10 +60,10 @@ const searchSequelize = new Sequelize(process.env.DATABASE_URL, {
 module.exports = searchSequelize;
 ```
 
-### 1B. Tune main DB pool — **PARTIAL**
-> Live: `pool.max=20`, `pool.acquire=15000` on main pool. Search pool's `dialectOptions` already split off so the future `statement_timeout` won't bleed into FTS queries.
+### 1B. Tune main DB pool — **DONE**
+> Live: `pool.max=20`, `pool.acquire=15000`, `dialectOptions.statement_timeout=10000` on main pool. Search pool's `dialectOptions` is split off so the main-pool timeout doesn't bleed into FTS queries.
 >
-> **Pending:** `statement_timeout=10000`. PgBouncer rejects unknown startup params with FATAL 08P01; needs `ignore_startup_parameters = extra_float_digits, statement_timeout` in `infra/pgbouncer/pgbouncer.ini`. Workflow's `Configure PgBouncer` step runs *after* `Install deps and reload PM2`, so a single deploy hits the chicken-and-egg. Either reorder the workflow or push pgbouncer config out-of-band first, then re-deploy app.
+> Pgbouncer.ini's `ignore_startup_parameters` was updated to allow `statement_timeout` so the pg client's startup-packet param is accepted. Deploy workflow was reordered: `Snapshot PgBouncer config` → `Configure PgBouncer` → `Install deps and reload PM2` so the app reloads against the new pgbouncer config. A symmetric `Rollback PgBouncer config` step (after the existing app-code `Rollback`) restores the snapshot on any pipeline failure.
 
 **File:** `server/src/db.js`
 - `pool.max`: 10 → **20**
