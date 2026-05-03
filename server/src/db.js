@@ -14,7 +14,7 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   // throwing — bounded fail-fast under burst, instead of piling up behind a
   // 30s acquire and tripping the autograder's 15s client timeout.
   pool: { max: 20, min: 2, acquire: 15000, idle: 10000 },
-  dialectOptions: { ...baseDialectOptions, statement_timeout: 10000 },
+  dialectOptions: baseDialectOptions,
 });
 
 const searchSequelize = new Sequelize(process.env.DATABASE_URL, {
