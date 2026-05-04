@@ -13,10 +13,11 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   // acquire=15000 caps how long a request waits for a free connection before
   // throwing — bounded fail-fast under burst, instead of piling up behind a
   // 30s acquire and tripping the autograder's 15s client timeout.
-  // statement_timeout=10000 caps any individual query — a runaway query can
-  // no longer pin a pool connection forever. Requires pgbouncer.ini's
-  // ignore_startup_parameters allowlist to include statement_timeout (the
-  // workflow pushes pgbouncer config before app reload to enforce that).
+  //
+  // statement_timeout (10s) is enforced by PgBouncer's `connect_query`, not by
+  // this dialectOptions value. PgBouncer's `ignore_startup_parameters` literally
+  // ignores the startup-packet param, so this is effectively a no-op via
+  // PgBouncer; kept here as belt-and-braces for any future direct-PG path.
   pool: { max: 20, min: 2, acquire: 15000, idle: 10000 },
   dialectOptions: { ...baseDialectOptions, statement_timeout: 10000 },
 });
