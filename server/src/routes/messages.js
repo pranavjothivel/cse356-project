@@ -47,12 +47,42 @@ function serializeConversationMessage(m) {
   };
 }
 
-// Cache time can be long since there aren't many channels 
+// Cache time can be long since there aren't many channels
 // and we have working invalidation, but just in case expire after 10 min
 const MEMBER_CACHE_TTL = 600; // seconds
 
 // This should be shorter as its mainly for reads happening immediately after the message is sent
 const MSG_CACHE_TTL = 60; // seconds
+
+// channel → community_id mapping. A channel's community_id is immutable
+// post-create, so we can cache it for a long time.
+const CHANNEL_COMMUNITY_TTL = 3600; // seconds
+
+async function getChannelCommunity(channelId) {
+  const cacheKey = `channel:${channelId}:community_id`;
+  const cached = await cacheClient.get(cacheKey);
+  if (cached) return cached;
+
+  const ch = await Channel.findByPk(channelId, { attributes: ['community_id'] });
+  if (!ch || !ch.community_id) return null;
+  await cacheClient.set(cacheKey, ch.community_id, { EX: CHANNEL_COMMUNITY_TTL });
+  return ch.community_id;
+}
+
+// Drop the cached unread-channels set for every member of a community.
+// Called after a message is created in a channel — every member's view of
+// "which channels in this community have unread messages" is now stale.
+async function invalidateUnreadChannelsForCommunity(communityId, userIds) {
+  if (!communityId || !userIds || userIds.length === 0) return;
+  const pipeline = cacheClient.multi();
+  for (const uid of userIds) pipeline.del(`unread:${uid}:${communityId}`);
+  await pipeline.exec();
+}
+
+async function invalidateUnreadChannelsForUser(userId, communityId) {
+  if (!userId || !communityId) return;
+  await cacheClient.del(`unread:${userId}:${communityId}`);
+}
 
 async function getChannelMemberIds(channelId) {
   const cacheKey = `channel:${channelId}:members`;
@@ -269,8 +299,9 @@ router.post('/', async (req, res, next) => {
       cacheClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
         .catch(err => console.warn('message cache set failed:', err.message));
 
-      // Fire-and-forget: broadcast to other users via WebSocket
-      getChannelMemberIds(channelId).then(memberIds => {
+      // Fire-and-forget: broadcast to other users via WebSocket and invalidate
+      // every member's per-community unread-channels cache.
+      getChannelMemberIds(channelId).then(async memberIds => {
         broadcastToUsers(memberIds, {
           type: 'channel.message.created',
           channelId,
@@ -280,7 +311,9 @@ router.post('/', async (req, res, next) => {
         if (otherMemberIds.length > 0) {
           broadcastToUsers(otherMemberIds, { type: 'channel.unread', channelId });
         }
-      }).catch(err => console.error('Broadcast error (channel):', err));
+        const communityId = await getChannelCommunity(channelId);
+        await invalidateUnreadChannelsForCommunity(communityId, memberIds);
+      }).catch(err => console.error('Broadcast/invalidate error (channel):', err));
       return;
     } else {
       const participant = await ConversationParticipant.findOne({
@@ -461,3 +494,5 @@ module.exports.invalidateChannelMember = invalidateChannelMember;
 module.exports.invalidateConversationMemberCache = invalidateConversationMemberCache;
 module.exports.getMessage = getMessage;
 module.exports.invalidateMessageCache = invalidateMessageCache;
+module.exports.getChannelCommunity = getChannelCommunity;
+module.exports.invalidateUnreadChannelsForUser = invalidateUnreadChannelsForUser;
