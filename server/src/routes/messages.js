@@ -266,7 +266,31 @@ router.get('/', async (req, res, next) => {
 });
 
 // POST /api/messages { channelId|conversationId, content, attachments? }
+//
+// Per-request timing is logged as a single JSON line per request once the
+// fire-and-forget broadcast finishes. The log lives inside the fire-and-forget
+// block (after res.json() and after the broadcast publishes), so it adds zero
+// latency to the sender's response and to receiver-side WS delivery.
+//
+// Fields:
+//   evt:               'msg_post'
+//   kind:              'channel' | 'conversation'
+//   reqId:             X-Request-ID injected by HAProxy (for correlation)
+//   recipients:        member count (broadcast cost scales with this)
+//   auth_ms:           membership check
+//   msg_create_ms:     Message.create() — INSERT incl. pool acquire
+//   to_response_ms:    handler entry → res.json() (sender-visible cost)
+//   bcast_members_ms:  member-list lookup (cache or DB)
+//   bcast_pub_ms:      broadcastToUsers (Redis publish round-trips)
+//   bcast_extra_ms:    cache invalidation (channel) / hidden_at update (convo)
+//   bcast_total_ms:    end-to-end fire-and-forget block
+//
+// Analysis (per-node):
+//   grep -h '"evt":"msg_post"' ~/.pm2/logs/cse356-out-*.log \
+//     | jq -s 'map(.bcast_total_ms) | sort | .[length * 0.95 | floor]'
 router.post('/', async (req, res, next) => {
+  const t0 = Date.now();
+  const reqId = req.headers['x-request-id'] || '';
   try {
     const { channelId, conversationId, content, attachments } = req.body;
     if ((channelId && conversationId) || (!channelId && !conversationId)) {
@@ -280,20 +304,25 @@ router.post('/', async (req, res, next) => {
     }
 
     if (channelId) {
+      const tAuth = Date.now();
       if (!(await getChannelMember(channelId, req.user.id))) return res.status(403).json({ error: 'Not a channel member' });
+      const auth_ms = Date.now() - tAuth;
 
+      const tCreate = Date.now();
       const msg = await Message.create({
         channel_id: channelId,
         author_id: req.user.id,
         content,
         ...(attachments ? { attachments } : {}),
       });
+      const msg_create_ms = Date.now() - tCreate;
       // Attach author from session instead of re-fetching from DB
       msg.author = { id: req.user.id, username: req.user.username, display_name: req.user.display_name };
       const serialized = serializeChannelMessage(msg);
 
       // Respond immediately, then cache + broadcast asynchronously
       res.status(201).json(serialized);
+      const to_response_ms = Date.now() - t0;
 
       // Fire-and-forget cache write — don't block the response on Redis.
       cacheClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
@@ -301,7 +330,10 @@ router.post('/', async (req, res, next) => {
 
       // Fire-and-forget: broadcast to other users via WebSocket and invalidate
       // every member's per-community unread-channels cache.
+      const tBcast = Date.now();
       getChannelMemberIds(channelId).then(async memberIds => {
+        const bcast_members_ms = Date.now() - tBcast;
+        const tPub = Date.now();
         broadcastToUsers(memberIds, {
           type: 'channel.message.created',
           channelId,
@@ -311,43 +343,72 @@ router.post('/', async (req, res, next) => {
         if (otherMemberIds.length > 0) {
           broadcastToUsers(otherMemberIds, { type: 'channel.unread', channelId });
         }
+        const bcast_pub_ms = Date.now() - tPub;
+        const tInv = Date.now();
         const communityId = await getChannelCommunity(channelId);
         await invalidateUnreadChannelsForCommunity(communityId, memberIds);
+        const bcast_extra_ms = Date.now() - tInv;
+        console.log(JSON.stringify({
+          evt: 'msg_post', kind: 'channel', reqId,
+          recipients: memberIds.length,
+          auth_ms, msg_create_ms, to_response_ms,
+          bcast_members_ms, bcast_pub_ms, bcast_extra_ms,
+          bcast_total_ms: Date.now() - tBcast,
+        }));
       }).catch(err => console.error('Broadcast/invalidate error (channel):', err));
       return;
     } else {
+      const tAuth = Date.now();
       const participant = await ConversationParticipant.findOne({
         where: { conversation_id: conversationId, user_id: req.user.id },
       });
       if (!participant) return res.status(403).json({ error: 'Not a conversation participant' });
+      const auth_ms = Date.now() - tAuth;
 
+      const tCreate = Date.now();
       const msg = await Message.create({
         conversation_id: conversationId,
         author_id: req.user.id,
         content,
         ...(attachments ? { attachments } : {}),
       });
+      const msg_create_ms = Date.now() - tCreate;
       const serialized = serializeConversationMessage(msg);
 
       // Respond immediately, then cache + broadcast asynchronously
       res.status(201).json(serialized);
+      const to_response_ms = Date.now() - t0;
 
       // Fire-and-forget cache write — don't block the response on Redis.
       cacheClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
         .catch(err => console.warn('message cache set failed:', err.message));
 
       // Fire-and-forget: un-hide + broadcast
+      const tBcast = Date.now();
       (async () => {
+        const tExtra = Date.now();
         await ConversationParticipant.update(
           { hidden_at: null },
           { where: { conversation_id: conversationId, hidden_at: { [Op.ne]: null } } }
         );
+        const bcast_extra_ms = Date.now() - tExtra;
+        const tMembers = Date.now();
         const participantIds = await getConversationParticipantIds(conversationId);
+        const bcast_members_ms = Date.now() - tMembers;
+        const tPub = Date.now();
         broadcastToUsers(participantIds, {
           type: 'message.created',
           conversationId,
           message: serialized,
         });
+        const bcast_pub_ms = Date.now() - tPub;
+        console.log(JSON.stringify({
+          evt: 'msg_post', kind: 'conversation', reqId,
+          recipients: participantIds.length,
+          auth_ms, msg_create_ms, to_response_ms,
+          bcast_members_ms, bcast_pub_ms, bcast_extra_ms,
+          bcast_total_ms: Date.now() - tBcast,
+        }));
       })().catch(err => console.error('Broadcast error (conversation):', err));
       return;
     }
