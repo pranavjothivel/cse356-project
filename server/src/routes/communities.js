@@ -2,9 +2,14 @@ const { Router } = require('express');
 const { Op, UniqueConstraintError } = require('sequelize');
 const { sequelize } = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
-const { presenceClient } = require('../redis');
+const { presenceClient, cacheClient } = require('../redis');
 const { broadcastToUsers } = require('../ws');
 const { invalidateChannelMemberCache, invalidateChannelMember } = require('./messages');
+
+// Per-(user, community) unread-channels cache. Short TTL is the floor;
+// explicit invalidation on Message.create + read-receipt update keeps it
+// near-coherent. Replaces a 1-3s SELECT that was starving the main DB pool.
+const UNREAD_CACHE_TTL = 30; // seconds
 
 const router = Router();
 
@@ -124,33 +129,45 @@ router.get('/:communityId', async (req, res, next) => {
       : [];
     const joinedMap = new Map(joinedChannels.map(cm => [cm.channel_id, cm.last_read_message_id]));
 
-    // Check all joined channels for unread messages in a single query.
-    // Uses LEFT JOIN to resolve last_read_message_id so that deleted
-    // last-read messages (lr.id IS NULL) are treated as "never read".
+    // Check all joined channels for unread messages. The SQL is cached per
+    // (user, community) — see UNREAD_CACHE_TTL above. The query uses LEFT
+    // JOIN to resolve last_read_message_id so that deleted last-read
+    // messages (lr.id IS NULL) are treated as "never read".
     const unreadSet = new Set();
     if (joinedChannels.length > 0) {
-      const unreadRows = await sequelize.query(`
-        SELECT cm.channel_id
-        FROM channel_members cm
-        LEFT JOIN messages lr ON lr.id = cm.last_read_message_id
-        WHERE cm.channel_id IN (:channelIds)
-          AND cm.user_id = :userId
-          AND EXISTS (
-            SELECT 1 FROM messages m
-            WHERE m.channel_id = cm.channel_id
-              AND (
-                lr.id IS NULL
-                OR (m.created_at, m.id) > (lr.created_at, lr.id)
-              )
-          )
-      `, {
-        replacements: {
-          channelIds: [...joinedMap.keys()],
-          userId: req.user.id,
-        },
-        type: sequelize.QueryTypes.SELECT,
-      });
-      for (const row of unreadRows) unreadSet.add(row.channel_id);
+      const cacheKey = `unread:${req.user.id}:${community.id}`;
+      const cached = await cacheClient.get(cacheKey);
+      let unreadChannelIds;
+      if (cached) {
+        unreadChannelIds = JSON.parse(cached);
+      } else {
+        const unreadRows = await sequelize.query(`
+          SELECT cm.channel_id
+          FROM channel_members cm
+          LEFT JOIN messages lr ON lr.id = cm.last_read_message_id
+          WHERE cm.channel_id IN (:channelIds)
+            AND cm.user_id = :userId
+            AND EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.channel_id = cm.channel_id
+                AND (
+                  lr.id IS NULL
+                  OR (m.created_at, m.id) > (lr.created_at, lr.id)
+                )
+            )
+        `, {
+          replacements: {
+            channelIds: [...joinedMap.keys()],
+            userId: req.user.id,
+          },
+          type: sequelize.QueryTypes.SELECT,
+        });
+        unreadChannelIds = unreadRows.map(r => r.channel_id);
+        // Fire-and-forget cache write — don't add latency to the response.
+        cacheClient.set(cacheKey, JSON.stringify(unreadChannelIds), { EX: UNREAD_CACHE_TTL })
+          .catch(err => console.warn('unread cache set failed:', err.message));
+      }
+      for (const id of unreadChannelIds) unreadSet.add(id);
     }
 
     const channels = community.channels.map(c => ({

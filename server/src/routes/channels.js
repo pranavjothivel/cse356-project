@@ -3,7 +3,7 @@ const { Channel, ChannelMember, CommunityMember, Community, User } = require('..
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
-const { invalidateChannelMemberCache, invalidateChannelMember, getMessage } = require('./messages');
+const { invalidateChannelMemberCache, invalidateChannelMember, getMessage, getChannelCommunity, invalidateUnreadChannelsForUser } = require('./messages');
 
 const router = Router();
 
@@ -163,6 +163,14 @@ router.post('/:channelId/read', async (req, res, next) => {
     });
 
     res.json({ lastReadMessageId: messageId });
+
+    // Fire-and-forget: drop this user's cached unread-channels set for the
+    // parent community so their next GET /api/communities/:id reflects the
+    // advanced last_read instead of returning stale unread flags.
+    getChannelCommunity(req.params.channelId)
+      .then(communityId => invalidateUnreadChannelsForUser(req.user.id, communityId))
+      .catch(err => console.warn('unread cache invalidate failed:', err.message));
+    return;
   } catch (err) { next(err); }
 });
 
