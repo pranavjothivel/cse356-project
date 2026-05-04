@@ -169,6 +169,50 @@ jobs:
             fi
           fi
 
+      - name: Snapshot PgBouncer config
+        id: pgbouncer-snapshot
+        if: ${{ matrix.node.is_first }}
+        run: |
+          set -euo pipefail
+          echo "Snapshotting /etc/pgbouncer/pgbouncer.ini from $NODE_NAME → runner..."
+          mkdir -p /tmp/pgbouncer-backup
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            root@$NODE_IP:/etc/pgbouncer/pgbouncer.ini /tmp/pgbouncer-backup/pgbouncer.ini
+          # Sanity: file exists and is non-empty before we proceed.
+          test -s /tmp/pgbouncer-backup/pgbouncer.ini
+          echo "Snapshot OK ($(wc -c </tmp/pgbouncer-backup/pgbouncer.ini) bytes)"
+
+      - name: Configure PgBouncer
+        run: |
+          # Moved before Install deps and reload PM2 so the app reloads against
+          # the new pgbouncer config (e.g. ignore_startup_parameters changes).
+          # Otherwise: chicken-and-egg, app crashes on connect because the old
+          # pgbouncer rejects the new startup params.
+          $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            ./infra/pgbouncer/ deploy@$NODE_IP:/srv/app/infra/pgbouncer/
+
+          $SSH root@$NODE_IP bash <<'PGBOUNCER'
+            set -euo pipefail
+            source /srv/app/.env
+            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                /srv/app/infra/pgbouncer/pgbouncer.ini \
+                > /etc/pgbouncer/pgbouncer.ini
+
+            echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
+            chmod 640 /etc/pgbouncer/userlist.txt
+            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+
+            systemctl reload pgbouncer || systemctl restart pgbouncer
+          PGBOUNCER
+
       - name: Install deps and reload PM2
         run: |
           # Record error log offset before reload so the PM2 status check only
@@ -246,6 +290,22 @@ jobs:
           $SSH deploy@$NODE_IP 'pm2 restart cse356'
           echo "::notice::Rollback successful on $NODE_NAME"
 
+      - name: Rollback PgBouncer config
+        # Restore /etc/pgbouncer/pgbouncer.ini from the snapshot taken before
+        # Configure PgBouncer ran. Fires on ANY job-failure path (not only the
+        # pm2check one) so a bad pgbouncer config that crashes the reload still
+        # gets reverted. Guarded by snapshot.outcome == 'success' so we never
+        # overwrite a known-good config with a missing/empty backup.
+        if: ${{ failure() && matrix.node.is_first && steps.pgbouncer-snapshot.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          echo "::error::Rolling back pgbouncer config on $NODE_NAME"
+          test -s /tmp/pgbouncer-backup/pgbouncer.ini
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+            /tmp/pgbouncer-backup/pgbouncer.ini root@$NODE_IP:/tmp/pgbouncer.ini.rollback
+          $SSH root@$NODE_IP 'set -eu; mv /tmp/pgbouncer.ini.rollback /etc/pgbouncer/pgbouncer.ini && chown postgres:postgres /etc/pgbouncer/pgbouncer.ini && (systemctl reload pgbouncer || systemctl restart pgbouncer)'
+          echo "::notice::PgBouncer config rollback successful on $NODE_NAME"
+
       - name: Post-rollback health check
         if: ${{ always() && matrix.node.is_first && steps.pm2check.outputs.has_error == 'true' }}
         run: |
@@ -300,34 +360,6 @@ jobs:
           done
           echo "::error::ssh root@LB re-enable failed after 5 attempts — node may be stranded in DRAIN!"
           exit 1
-
-      - name: Configure PgBouncer
-        if: always()
-        run: |
-          $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"
-          rsync -az \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            ./infra/pgbouncer/ deploy@$NODE_IP:/srv/app/infra/pgbouncer/
-
-          $SSH root@$NODE_IP bash <<'PGBOUNCER'
-            set -euo pipefail
-            source /srv/app/.env
-            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
-            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-
-            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
-                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
-                /srv/app/infra/pgbouncer/pgbouncer.ini \
-                > /etc/pgbouncer/pgbouncer.ini
-
-            echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
-            chmod 640 /etc/pgbouncer/userlist.txt
-            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
-
-            systemctl reload pgbouncer || systemctl restart pgbouncer
-          PGBOUNCER
 
       - name: "[WARNING] Deploy failed — rollback applied"
         if: ${{ always() && steps.pm2check.outputs.has_error == 'true' }}
