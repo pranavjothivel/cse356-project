@@ -9,7 +9,7 @@ const { lock } = require('simple-redis-mutex');
 const User = require('../models/User');
 const { minioClient, BUCKET } = require('../upload');
 const { broadcastPresenceChange, withUserPresenceLock, notifyUserAwayFrame, lockOptions } = require('../ws');
-const redisClient = require('../redis');
+const { redisClient, presenceClient } = require('../redis');
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -300,7 +300,7 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
       const userId = req.user.id;
       release = await lock(redisClient, `lock:users:${userId}`, lockOptions);
       let finalPresence = away ? 'away' : 'online';
-      const raw = await redisClient.hGet(`users:${userId}`, 'body');
+      const raw = await presenceClient.hGet(`users:${userId}`, 'body');
       if (raw) {
         const redisUser = JSON.parse(raw);
         // Preserve per-conn idle/online state across the toggle:
@@ -327,7 +327,7 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
           if (p === 'online') finalPresence = 'online';
         }
         redisUser.presence = finalPresence;
-        await redisClient.hSet(`users:${userId}`, 'body', JSON.stringify(redisUser));
+        await presenceClient.hSet(`users:${userId}`, 'body', JSON.stringify(redisUser));
       }
 
       // Notify the user's own sessions (local + cross-server) so their UIs

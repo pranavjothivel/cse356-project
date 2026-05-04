@@ -7,7 +7,7 @@ const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { buildMessageCursor } = require('../util/messageCursor');
 const { minioClient, BUCKET } = require('../upload');
-const redisClient = require('../redis');
+const { cacheClient } = require('../redis');
 
 const router = Router();
 
@@ -56,7 +56,7 @@ const MSG_CACHE_TTL = 60; // seconds
 
 async function getChannelMemberIds(channelId) {
   const cacheKey = `channel:${channelId}:members`;
-  const cached = await redisClient.get(cacheKey);
+  const cached = await cacheClient.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const members = await ChannelMember.findAll({
@@ -64,17 +64,17 @@ async function getChannelMemberIds(channelId) {
     attributes: ['user_id'],
   });
   const ids = members.map(m => m.user_id);
-  await redisClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
+  await cacheClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
   return ids;
 }
 
 async function invalidateChannelMemberCache(channelId) {
-  await redisClient.del(`channel:${channelId}:members`);
+  await cacheClient.del(`channel:${channelId}:members`);
 }
 
 async function getChannelMember(channelId, userId) {
   const cacheKey = `channel:${channelId}:member:${userId}`;
-  const cached = await redisClient.get(cacheKey);
+  const cached = await cacheClient.get(cacheKey);
   if (cached) return true;
 
   const member = await ChannelMember.findOne({
@@ -82,18 +82,18 @@ async function getChannelMember(channelId, userId) {
   });
   if (!member) return false;
 
-  await redisClient.set(cacheKey, 1, { EX: MEMBER_CACHE_TTL });
+  await cacheClient.set(cacheKey, 1, { EX: MEMBER_CACHE_TTL });
   return true;
 }
 
 async function invalidateChannelMember(channelId, userId) {
-  await redisClient.del(`channel:${channelId}:member:${userId}`);
+  await cacheClient.del(`channel:${channelId}:member:${userId}`);
 }
 
 
 async function getMessage(id) {
   const cacheKey = `message:${id}`;
-  const cached = await redisClient.get(cacheKey);
+  const cached = await cacheClient.get(cacheKey);
   if (cached) {
     let msg = JSON.parse(cached);
     // Convert string to Date
@@ -109,13 +109,13 @@ async function getMessage(id) {
 }
 
 async function invalidateMessageCache(id) {
-  await redisClient.del(`message:${id}`);
+  await cacheClient.del(`message:${id}`);
 }
 
 
 async function getConversationParticipantIds(conversationId) {
   const cacheKey = `conv:${conversationId}:members`;
-  const cached = await redisClient.get(cacheKey);
+  const cached = await cacheClient.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const parts = await ConversationParticipant.findAll({
@@ -123,12 +123,12 @@ async function getConversationParticipantIds(conversationId) {
     attributes: ['user_id'],
   });
   const ids = parts.map(p => p.user_id);
-  await redisClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
+  await cacheClient.set(cacheKey, JSON.stringify(ids), { EX: MEMBER_CACHE_TTL });
   return ids;
 }
 
 async function invalidateConversationMemberCache(conversationId) {
-  await redisClient.del(`conv:${conversationId}:members`);
+  await cacheClient.del(`conv:${conversationId}:members`);
 }
 
 // GET /api/messages?channelId=X[&before=Y&around=Y&limit=N]
@@ -266,7 +266,7 @@ router.post('/', async (req, res, next) => {
       res.status(201).json(serialized);
 
       // Fire-and-forget cache write — don't block the response on Redis.
-      redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
+      cacheClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
         .catch(err => console.warn('message cache set failed:', err.message));
 
       // Fire-and-forget: broadcast to other users via WebSocket
@@ -300,7 +300,7 @@ router.post('/', async (req, res, next) => {
       res.status(201).json(serialized);
 
       // Fire-and-forget cache write — don't block the response on Redis.
-      redisClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
+      cacheClient.set(`message:${msg.id}`, JSON.stringify(serialized), { EX: MSG_CACHE_TTL })
         .catch(err => console.warn('message cache set failed:', err.message));
 
       // Fire-and-forget: un-hide + broadcast

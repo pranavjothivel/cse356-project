@@ -27,7 +27,7 @@ const { Op } = require('sequelize');
 const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
 const ConversationParticipant = require('./models/ConversationParticipant');
-const redisClient = require('./redis');
+const { redisClient, presenceClient } = require('./redis');
 const { createClient } = require('redis');
 
 // Identifier that should be sent when publishing through Redis
@@ -379,7 +379,7 @@ const configureWSServer = (wss) => {
 
           release = await lock(redisClient, `lock:users:${id}`, lockOptions);
           const conns = users.get(id);
-          const raw = await redisClient.hGet(`users:${id}`, "body");
+          const raw = await presenceClient.hGet(`users:${id}`, "body");
           if (!raw) {
             await release();
             updateWSMetrics(date1);
@@ -442,7 +442,7 @@ const configureWSServer = (wss) => {
           }
           redisUser.presence = finalPresence;
 
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+          await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
           // Sync user's own other sessions (cross-server) for away/unaway
           if (newPresence === "away" || newPresence === "unaway") {
@@ -479,7 +479,7 @@ const configureWSServer = (wss) => {
       let release = async () => {};
       try {
         release = await lock(redisClient, `lock:users:${id}`, lockOptions);
-        const raw = await redisClient.hGet(`users:${id}`, "body");
+        const raw = await presenceClient.hGet(`users:${id}`, "body");
         if (!raw) {
           // Already cleaned up (e.g. by a concurrent close)
           connections.delete(connId);
@@ -495,7 +495,7 @@ const configureWSServer = (wss) => {
         // only remaining conn — check against the conn set that actually
         // contains our connId to avoid racing with a concurrent init.
         if (connIds.length <= 1 && redisUser.conns[connId]) {
-          await redisClient.del(`users:${id}`);
+          await presenceClient.del(`users:${id}`);
           users.delete(id);
           broadcastPresenceChange(id, 'offline');
         }
@@ -514,7 +514,7 @@ const configureWSServer = (wss) => {
 
           const prevFinalPresence = redisUser.presence;
           redisUser.presence = finalPresence;
-          await redisClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+          await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
           if (finalPresence !== prevFinalPresence) {
             broadcastPresenceChange(id, finalPresence);
@@ -557,7 +557,7 @@ const configureWSServer = (wss) => {
       let initRelease = async () => {};
       try {
         initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
-        const existingStr = await redisClient.hGet(`users:${id}`, "body");
+        const existingStr = await presenceClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;
 
@@ -592,7 +592,7 @@ const configureWSServer = (wss) => {
         }
         user.presence = finalPresence;
 
-        await redisClient.hSet(`users:${id}`, "body", JSON.stringify(user));
+        await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(user));
 
         let conns = users.get(id);
         if (!conns) {
