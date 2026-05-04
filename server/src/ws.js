@@ -196,15 +196,34 @@ const connections = new Map();
 /**
  * Deliver a payload to every local WS connection of the given user ids.
  * Used by both the Redis fanout subscriber and the local-side of broadcastToUsers.
+ *
+ * Per-fanout timing is logged when either the recipients list is large
+ * (>= 50) or the fanout itself is slow (>= 5ms), to keep log volume sane.
+ *   evt: 'ws_fanout'
+ *   recipients: userIds passed in (full member list, before local filter)
+ *   delivered: count with at least one local conn
+ *   frames: total ws.send() calls (delivered users × their conn count)
+ *   ms: wall time for the function
  */
 function deliverLocal(userIds, payload) {
+  const t0 = Date.now();
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  let delivered = 0, frames = 0;
   for (const userId of userIds) {
     const conns = users.get(userId);
     if (!conns) continue;
+    delivered++;
     for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+      try { conns[cid].send(data); frames++; } catch (e) { /* ignore broken socket */ }
     }
+  }
+  const ms = Date.now() - t0;
+  if (userIds.length >= 50 || ms >= 5) {
+    console.log(JSON.stringify({
+      evt: 'ws_fanout',
+      recipients: userIds.length,
+      delivered, frames, ms,
+    }));
   }
 }
 
