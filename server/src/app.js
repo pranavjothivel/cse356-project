@@ -28,7 +28,7 @@ const usersRouter = require('./routes/users');
 const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
 const messagesRouter = require('./routes/messages');
-const redisClient = require('./redis');
+const { redisClient } = require('./redis');
 const { configureWSServer, initWS } = require('./ws');
 
 const app = express();

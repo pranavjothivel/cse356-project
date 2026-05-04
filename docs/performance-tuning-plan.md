@@ -22,7 +22,7 @@ The changes below address all three via: dedicated DB pools, multi-client Redis,
 | 1D — Postgres `max_connections` | **DONE+** | Bumped 200→**300** on 2026-04-29 (exceeds plan). Same maintenance window also raised `shared_buffers` 128MB→2GB and installed `pg_stat_statements` (not in original plan). |
 | 1E — Node.js GC tuning | **DONE** | `node_args: '--max-semi-space-size=8 --max-old-space-size=384'` added to `ecosystem.config.js`. |
 | 1F — Redis mutex config | **PARTIAL** | `timeout=500` (target 2000). `pollingInterval=50` ✓. No `failAfter`. |
-| 2 — Redis multi-client | **PENDING** | `redis.js` still single-client export. |
+| 2 — Redis multi-client | **DONE** | `redis.js` exports `redisClient` (mutex/sessions), `cacheClient` (caches), `presenceClient` (HGET/HSET on `users:[id]`). 7 importers updated. Pub/sub `publishClient`/`subClient` already split via `REDIS_PUBLISH_URL`. |
 | 3A–3E — multi-client importers | **PENDING** | Blocked on Phase 2. |
 | 3F — `search.js` uses `searchSequelize` | **DONE** | `routes/search.js:4` imports `{ searchSequelize: sequelize } from '../db'`. |
 | 4 — Search scope cache | **PENDING** | No `user:*:search_scope` keys in code. Blocked on Phase 2. |

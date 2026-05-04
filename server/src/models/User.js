@@ -1,7 +1,7 @@
 const { DataTypes, Model } = require('sequelize');
 const bcrypt = require('bcrypt');
 const { sequelize } = require('../db');
-const redisClient = require('../redis');
+const { cacheClient } = require('../redis');
 
 class User extends Model {
   async verifyPassword(password) {
@@ -89,7 +89,7 @@ User.init({
 // is not.
 const invalidateUserCache = (instance) => {
   if (instance && instance.id) {
-    redisClient.del(`user:${instance.id}`).catch(() => {});
+    cacheClient.del(`user:${instance.id}`).catch(() => {});
   }
 };
 User.addHook('afterSave', invalidateUserCache);

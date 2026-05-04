@@ -4,7 +4,7 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const GitHubStrategy = require('passport-github2').Strategy;
 const { Issuer, custom, Strategy: OidcStrategy } = require('openid-client');
 const User = require('../models/User');
-const redisClient = require('../redis');
+const { cacheClient } = require('../redis');
 
 const USER_CACHE_TTL = 60; // seconds
 
@@ -19,7 +19,7 @@ passport.serializeUser((user, done) => {
 
 passport.deserializeUser(async (id, done) => {
   try {
-    const cached = await redisClient.get(`user:${id}`);
+    const cached = await cacheClient.get(`user:${id}`);
     if (cached) {
       // Rehydrate to a Sequelize instance so callers that mutate via
       // `req.user.save()` / `req.user.linkProvider()` / `.verifyPassword()`
@@ -30,7 +30,7 @@ passport.deserializeUser(async (id, done) => {
     const user = await User.findByPk(id);
     if (user) {
       // Fire-and-forget cache write — don't block the request on Redis.
-      redisClient.set(`user:${id}`, JSON.stringify(user.toJSON()), { EX: USER_CACHE_TTL })
+      cacheClient.set(`user:${id}`, JSON.stringify(user.toJSON()), { EX: USER_CACHE_TTL })
         .catch(err => console.warn('user cache set failed:', err.message));
     }
     done(null, user);

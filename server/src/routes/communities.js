@@ -2,7 +2,7 @@ const { Router } = require('express');
 const { Op, UniqueConstraintError } = require('sequelize');
 const { sequelize } = require('../db');
 const { Community, CommunityMember, Channel, ChannelMember, User } = require('../models');
-const redisClient = require('../redis');
+const { presenceClient } = require('../redis');
 const { broadcastToUsers } = require('../ws');
 const { invalidateChannelMemberCache, invalidateChannelMember } = require('./messages');
 
@@ -279,7 +279,7 @@ router.get('/:communityId/members', async (req, res, next) => {
     let redisBodies = [];
     if (memberships.length > 0) {
       try {
-        const pipeline = redisClient.multi();
+        const pipeline = presenceClient.multi();
         memberships.forEach(m => pipeline.hGet(`users:${m.user.id}`, 'body'));
         redisBodies = await pipeline.exec();
       } catch (_) {
