@@ -43,34 +43,38 @@ app.set('trust proxy', 1);
  */
 let metrics = new Map();
 
-app.use((req, res, next) => {
-  // Make sure to replace uuid route params with :id
-  let route = req.method + " " + req.path.replaceAll(/[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*/g, ':id');
-
-  let date1 = Date.now();
-  res.on('finish', () => {
-    try {
-      let date2 = Date.now();
-      let metric = metrics.get(route);
-      if (!metric) {
-        metric = {reqs: 0, sumResponse: 0, last500Sum: 0, current500Sum: 0, current500: 0}
-      }
-      let resTime = date2 - date1;
-      metric.reqs++;
-      metric.sumResponse += resTime;
-      metric.current500Sum += resTime;
-      metric.current500++;
-      if (metric.current500 === 500) {
-        metric.current500 = 0;
-        metric.last500Sum = metric.current500Sum;
-        metric.current500Sum = 0;
-      }
-      metrics.set(route, metric);
-    }
-    catch (err) {}
-  });
-  next();
-});
+// Metrics middleware temporarily disabled to A/B-test its hot-path cost.
+// `metrics` Map and the GET /api/metrics endpoint remain; the endpoint will
+// just return an empty list while this is off. Re-enable by uncommenting if
+// the disable doesn't move P95 in the expected direction.
+// app.use((req, res, next) => {
+//   // Make sure to replace uuid route params with :id
+//   let route = req.method + " " + req.path.replaceAll(/[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*-[0-9|a-f]*/g, ':id');
+//
+//   let date1 = Date.now();
+//   res.on('finish', () => {
+//     try {
+//       let date2 = Date.now();
+//       let metric = metrics.get(route);
+//       if (!metric) {
+//         metric = {reqs: 0, sumResponse: 0, last500Sum: 0, current500Sum: 0, current500: 0}
+//       }
+//       let resTime = date2 - date1;
+//       metric.reqs++;
+//       metric.sumResponse += resTime;
+//       metric.current500Sum += resTime;
+//       metric.current500++;
+//       if (metric.current500 === 500) {
+//         metric.current500 = 0;
+//         metric.last500Sum = metric.current500Sum;
+//         metric.current500Sum = 0;
+//       }
+//       metrics.set(route, metric);
+//     }
+//     catch (err) {}
+//   });
+//   next();
+// });
 
 // GET /api/metrics?sort=[name or reqs or avg]
 app.get('/api/metrics', (req, res, next) => {
