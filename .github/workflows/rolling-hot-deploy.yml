@@ -150,34 +150,58 @@ jobs:
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
         run: |
-          echo "Syncing code to $NODE_NAME..."
-          printf '%s' "$ENV_FILE" | $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
+          # 5-attempt retry to ride the recurring `kex_exchange_identification:
+          # Connection reset by peer` from app-node sshd under autograder load.
+          # Same shape as the LB drain/re-enable retry at the top of this job.
+          with_retry() {
+            local desc="$1"; shift
+            local n=0
+            while [ $n -lt 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "::warning::$desc failed (attempt $n/5) — retrying in 5s..." >&2
+              sleep 5
+            done
+            echo "::error::$desc failed after 5 attempts" >&2
+            return 1
+          }
 
-          rsync_once() {
+          push_env() {
+            printf '%s' "$ENV_FILE" | $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
+          }
+          rsync_code() {
             rsync -az --delete \
               --exclude='.env' --exclude='node_modules/' \
               -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
               ./server/ deploy@$NODE_IP:/srv/app/
           }
-          if ! rsync_once; then
-            if [ "$NODE_IP" = "130.245.136.239" ]; then
-              echo "rsync failed for node-03, retrying once..."
-              sleep 3
-              rsync_once
-            else
-              exit 1
-            fi
-          fi
+
+          echo "Syncing code to $NODE_NAME..."
+          with_retry "env push to $NODE_NAME" push_env
+          with_retry "rsync code to $NODE_NAME" rsync_code
 
       - name: Snapshot PgBouncer config
         id: pgbouncer-snapshot
         if: ${{ matrix.node.is_first }}
         run: |
           set -euo pipefail
+          with_retry() {
+            local desc="$1"; shift; local n=0
+            while [ $n -lt 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "::warning::$desc failed (attempt $n/5) — retrying in 5s..." >&2
+              sleep 5
+            done
+            echo "::error::$desc failed after 5 attempts" >&2; return 1
+          }
+          scp_snapshot() {
+            scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+              root@$NODE_IP:/etc/pgbouncer/pgbouncer.ini /tmp/pgbouncer-backup/pgbouncer.ini
+          }
           echo "Snapshotting /etc/pgbouncer/pgbouncer.ini from $NODE_NAME → runner..."
           mkdir -p /tmp/pgbouncer-backup
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
-            root@$NODE_IP:/etc/pgbouncer/pgbouncer.ini /tmp/pgbouncer-backup/pgbouncer.ini
+          with_retry "scp pgbouncer.ini from $NODE_NAME" scp_snapshot
           # Sanity: file exists and is non-empty before we proceed.
           test -s /tmp/pgbouncer-backup/pgbouncer.ini
           echo "Snapshot OK ($(wc -c </tmp/pgbouncer-backup/pgbouncer.ini) bytes)"
@@ -188,56 +212,90 @@ jobs:
           # the new pgbouncer config (e.g. ignore_startup_parameters changes).
           # Otherwise: chicken-and-egg, app crashes on connect because the old
           # pgbouncer rejects the new startup params.
-          $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"
-          rsync -az \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
-            ./infra/pgbouncer/ deploy@$NODE_IP:/srv/app/infra/pgbouncer/
+          with_retry() {
+            local desc="$1"; shift; local n=0
+            while [ $n -lt 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "::warning::$desc failed (attempt $n/5) — retrying in 5s..." >&2
+              sleep 5
+            done
+            echo "::error::$desc failed after 5 attempts" >&2; return 1
+          }
 
-          $SSH root@$NODE_IP bash <<'PGBOUNCER'
-            set -euo pipefail
-            source /srv/app/.env
-            PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
-            PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-            PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-            PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+          mk_pgbouncer_dir() { $SSH deploy@$NODE_IP "mkdir -p /srv/app/infra/pgbouncer"; }
+          rsync_pgbouncer() {
+            rsync -az \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes" \
+              ./infra/pgbouncer/ deploy@$NODE_IP:/srv/app/infra/pgbouncer/
+          }
+          apply_pgbouncer() {
+            $SSH root@$NODE_IP bash <<'PGBOUNCER'
+              set -euo pipefail
+              source /srv/app/.env
+              PG_HOST=$(echo "$PG_DIRECT_URL" | sed -n 's|.*@\([^:/]*\).*|\1|p')
+              PG_DBNAME=$(echo "$PG_DIRECT_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+              PG_USER=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+              PG_PASS=$(echo "$PG_DIRECT_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
 
-            sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
-                -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
-                /srv/app/infra/pgbouncer/pgbouncer.ini \
-                > /etc/pgbouncer/pgbouncer.ini
+              sed -e "s|PG_HOST_PLACEHOLDER|$PG_HOST|" \
+                  -e "s|PG_DBNAME_PLACEHOLDER|$PG_DBNAME|" \
+                  /srv/app/infra/pgbouncer/pgbouncer.ini \
+                  > /etc/pgbouncer/pgbouncer.ini
 
-            echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
-            chmod 640 /etc/pgbouncer/userlist.txt
-            chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
+              echo "\"$PG_USER\" \"$PG_PASS\"" > /etc/pgbouncer/userlist.txt
+              chmod 640 /etc/pgbouncer/userlist.txt
+              chown postgres:postgres /etc/pgbouncer/userlist.txt /etc/pgbouncer/pgbouncer.ini
 
-            systemctl reload pgbouncer || systemctl restart pgbouncer
+              systemctl reload pgbouncer || systemctl restart pgbouncer
           PGBOUNCER
+          }
+
+          with_retry "ssh mkdir pgbouncer dir on $NODE_NAME" mk_pgbouncer_dir
+          with_retry "rsync pgbouncer config to $NODE_NAME" rsync_pgbouncer
+          with_retry "ssh apply pgbouncer config on $NODE_NAME" apply_pgbouncer
 
       - name: Install deps and reload PM2
         run: |
+          with_retry() {
+            local desc="$1"; shift; local n=0
+            while [ $n -lt 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "::warning::$desc failed (attempt $n/5) — retrying in 5s..." >&2
+              sleep 5
+            done
+            echo "::error::$desc failed after 5 attempts" >&2; return 1
+          }
+
           # Record error log offset before reload so the PM2 status check only
           # shows lines written by the new process, not leftover history.
-          $SSH root@$NODE_IP \
-            'cat /var/log/pm2/cse356-error.log 2>/dev/null | wc -c' \
-            > /tmp/pm2-err-offset
-
-          $SSH deploy@$NODE_IP bash <<'REMOTE'
-            set -euo pipefail
-            export PATH="$PATH:/usr/local/bin"
-            cd /srv/app
-            mkdir -p /srv/app/uploads
-            npm install --omit=dev --prefer-offline
-            if pm2 describe cse356 > /dev/null 2>&1; then
-              pm2 reload ecosystem.config.js --update-env
-            else
-              pm2 start ecosystem.config.js
-            fi
-            _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
-              || { echo "$_out" | grep -q "Nothing to do" \
-                && echo "pm2: already at $(nproc) instances, skipping scale" \
-                || { echo "$_out" >&2; exit 1; }; }
-            pm2 save
+          read_offset() {
+            $SSH root@$NODE_IP 'cat /var/log/pm2/cse356-error.log 2>/dev/null | wc -c' \
+              > /tmp/pm2-err-offset
+          }
+          install_and_reload() {
+            $SSH deploy@$NODE_IP bash <<'REMOTE'
+              set -euo pipefail
+              export PATH="$PATH:/usr/local/bin"
+              cd /srv/app
+              mkdir -p /srv/app/uploads
+              npm install --omit=dev --prefer-offline
+              if pm2 describe cse356 > /dev/null 2>&1; then
+                pm2 reload ecosystem.config.js --update-env
+              else
+                pm2 start ecosystem.config.js
+              fi
+              _out=$(pm2 scale cse356 $(nproc) 2>&1) && echo "$_out" \
+                || { echo "$_out" | grep -q "Nothing to do" \
+                  && echo "pm2: already at $(nproc) instances, skipping scale" \
+                  || { echo "$_out" >&2; exit 1; }; }
+              pm2 save
           REMOTE
+          }
+
+          with_retry "ssh read pm2 err offset on $NODE_NAME" read_offset
+          with_retry "ssh install+reload pm2 on $NODE_NAME" install_and_reload
 
       - name: Health check
         run: |
@@ -258,20 +316,50 @@ jobs:
         id: pm2check
         if: always()
         run: |
+          with_retry() {
+            local desc="$1"; shift; local n=0
+            while [ $n -lt 5 ]; do
+              "$@" && return 0
+              n=$((n+1))
+              echo "::warning::$desc failed (attempt $n/5) — retrying in 5s..." >&2
+              sleep 5
+            done
+            echo "::error::$desc failed after 5 attempts" >&2; return 1
+          }
+
+          show_pm2_list() { $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'; }
+          tail_errlog() {
+            local offset=$1
+            $SSH root@$NODE_IP "tail -c +$(( offset + 1 )) /var/log/pm2/cse356-error.log 2>/dev/null || true"
+          }
+          fetch_pm2_jlist() { $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 jlist"'; }
+
           echo "PM2 status on $NODE_NAME:"
-          $SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 list"'
-          offset=$(cat /tmp/pm2-err-offset)
+          with_retry "ssh pm2 list on $NODE_NAME" show_pm2_list
+          offset=$(cat /tmp/pm2-err-offset 2>/dev/null || echo 0)
           echo "--- error log since reload (offset $offset) ---"
-          $SSH root@$NODE_IP \
-            "tail -c +$(( offset + 1 )) /var/log/pm2/cse356-error.log 2>/dev/null || true"
+          with_retry "ssh tail err log on $NODE_NAME" tail_errlog "$offset"
 
           # Parse via jq on the runner (guaranteed available) rather than on the node.
           # Checks: at least one cse356 instance exists AND all are "online".
           # "launching" is intentionally treated as a failure — by the time this step
           # runs the health check has already passed, so all instances must have
           # settled. A "launching" here means something restarted unexpectedly.
-          pm2_json=$($SSH root@$NODE_IP 'su -s /bin/bash deploy -c "pm2 jlist"')
-          if echo "$pm2_json" | jq -e '
+          # Retry the jlist fetch — under autograder load the node's sshd accept
+          # queue overflows; we don't want a transient kex reset to drive a
+          # spurious has_error=true and trigger a rollback of a healthy node.
+          pm2_json=""
+          n=0
+          while [ $n -lt 5 ]; do
+            if pm2_json=$(fetch_pm2_jlist); then break; fi
+            n=$((n+1))
+            echo "::warning::ssh pm2 jlist on $NODE_NAME failed (attempt $n/5) — retrying in 5s..." >&2
+            sleep 5
+          done
+          if [ -z "$pm2_json" ]; then
+            echo "::error::pm2 jlist failed after 5 attempts; treating as has_error=true"
+            echo "has_error=true" >> "$GITHUB_OUTPUT"
+          elif echo "$pm2_json" | jq -e '
             [.[] | select(.name == "cse356")] | length > 0
             and all(.pm2_env.status == "online")
           ' > /dev/null; then
