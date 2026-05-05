@@ -29,7 +29,7 @@ const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
 const messagesRouter = require('./routes/messages');
 const { redisClient } = require('./redis');
-const { configureWSServer, initWS } = require('./ws');
+const { configureWSServer, initWSPublisher, initWSSubscriber } = require('./ws');
 
 const app = express();
 
@@ -250,14 +250,18 @@ async function start() {
 
   await setupOidcStrategy();
 
-  // Connect + subscribe the Redis pub/sub subscriber before accepting any
-  // requests. If this fails the worker crashes and PM2 restarts it — much
-  // better than silently running with a dead subscriber that drops
-  // presence.changed fanout from the other node.
-  // Skipped on HTTP-only workers (WORKER_ROLE=http) since they have no
-  // WS connections to deliver to.
+  // Publisher is needed by REST handlers (broadcastToUsers in messages.js
+  // etc.) on EVERY node — including api_only nodes that don't accept WS
+  // connections themselves. Calling publishClient.publish() on a never-
+  // connected client silently drops the broadcast.
+  await initWSPublisher();
+
+  // Subscriber is only useful on workers that have local WS connections to
+  // deliver inbound broadcasts to. Skipping on api_only nodes saves the
+  // cost of receiving every cluster broadcast (~10MB/sec at our scale)
+  // just to iterate an empty local users Map and discard.
   if (WORKER_ROLE !== 'http') {
-    await initWS();
+    await initWSSubscriber();
   }
 
   const port = process.env.PORT || 3000;

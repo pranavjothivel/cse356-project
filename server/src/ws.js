@@ -113,15 +113,34 @@ function bufferToUUIDs(buffer) {
 }
 
 /**
- * Initialize the Redis subscriber. Must be awaited from app startup before
- * the HTTP server begins accepting requests — otherwise fanout_all messages
- * published by other workers during the startup window would be dropped.
+ * Connect the Redis publish client. MUST be called on every worker that
+ * runs REST handlers (POST /api/messages, conversations/*, channels/*),
+ * because broadcastToUsers() calls publishClient.publish() fire-and-forget.
+ * On a never-connected client, that call returns silently without sending,
+ * so cross-node WS broadcasts disappear into a black hole.
+ *
+ * Cheap: one TCP connection to Redis, no subscription overhead. Safe to
+ * call on api_only nodes that never accept WS connections themselves.
  */
-async function initWS() {
+async function initWSPublisher() {
   await publishClient.connect();
+  console.log("Redis publisher connected");
+}
+
+/**
+ * Connect the Redis subscriber and register the cross-node fanout handler.
+ * Only needed on workers that run a WebSocket.Server — otherwise we'd
+ * receive every cluster broadcast just to iterate an empty local users Map
+ * and discard. ~10MB/sec at our scale, worth skipping on api_only nodes.
+ *
+ * Must be awaited from app startup before the HTTP server begins accepting
+ * requests — otherwise fanout_all messages published by other workers
+ * during the startup window would be dropped.
+ */
+async function initWSSubscriber() {
   await subClient.connect();
   await subClient.subscribe('messages', handleSubMessage);
-  console.log("Redis publisher and subscriber connected");
+  console.log("Redis subscriber connected");
 }
 
 // ──────────────────────────────────────────────
@@ -706,7 +725,8 @@ module.exports = {
   broadcastPresenceChange,
   notifyUserAwayFrame,
   getCoCommunityUserIds,
-  initWS,
+  initWSPublisher,
+  initWSSubscriber,
   withUserPresenceLock,
   lockOptions
 };
