@@ -302,6 +302,19 @@ router.post('/', async (req, res, next) => {
       if (!(await getChannelMember(channelId, req.user.id))) return res.status(403).json({ error: 'Not a channel member' });
       const auth_ms = Date.now() - tAuth;
 
+      // Kick off the channel-member fetch in parallel with the DB write.
+      // Both are needed before broadcast; overlapping them removes the
+      // member-fetch wait (~33ms p95) from recipient delivery latency.
+      // bcast_members_ms now reflects the fetch's own duration; if it
+      // resolves before Message.create finishes, the broadcast .then below
+      // fires immediately on the post-create microtask.
+      const tMembers = Date.now();
+      let bcast_members_ms = 0;
+      const memberIdsPromise = getChannelMemberIds(channelId).then(ids => {
+        bcast_members_ms = Date.now() - tMembers;
+        return ids;
+      });
+
       const tCreate = Date.now();
       const msg = await Message.create({
         channel_id: channelId,
@@ -329,8 +342,7 @@ router.post('/', async (req, res, next) => {
       // staleness; the channel.message.created WS event keeps clients
       // informed in real time. Mark-as-read still invalidates per-user.
       const tBcast = Date.now();
-      getChannelMemberIds(channelId).then(memberIds => {
-        const bcast_members_ms = Date.now() - tBcast;
+      memberIdsPromise.then(memberIds => {
         const tPub = Date.now();
         broadcastToUsers(memberIds, {
           type: 'channel.message.created',
