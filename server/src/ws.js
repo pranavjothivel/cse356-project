@@ -90,14 +90,16 @@ function handleSubMessage(raw) {
       deliverLocal(userIds, msg.payload);
     }
     else if (msg.type === "fanout_all") {
-      // Broadcast payload to every locally connected user (optionally excluding one).
+      // Defer presence broadcasts to next event-loop tick so message fanouts
+      // (msg.type='fanout') sitting in libuv's recv queue interleave first.
+      // Within the loop, fanoutAllChunked yields every 50 sends so other
+      // event-loop work can run during long ~750-conn fanouts. Together
+      // these reduce the WS event-loop queueing that's been showing up as
+      // ~160ms pubsub_propagation p95 - 24ms bcast_pub_ms gap.
       const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
-      for (const [uid, conns] of users.entries()) {
-        if (msg.excludeUserId && uid === msg.excludeUserId) continue;
-        for (const cid of Object.keys(conns)) {
-          try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
-        }
-      }
+      setImmediate(() => {
+        fanoutAllChunked(data, msg.excludeUserId).catch(err => console.error('fanout_all error:', err));
+      });
     }
   }
   catch (err) {
@@ -367,19 +369,36 @@ function notifyUserAwayFrame(userId, value) {
  */
 function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  // Local delivery
-  for (const [uid, conns] of users.entries()) {
-    if (uid === excludeUserId) continue;
-    for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
-    }
-  }
-  // Cross-server fanout
+  // Cross-server fanout FIRST so other WS nodes can start work in parallel,
+  // then defer + chunk local delivery so this worker's event loop stays
+  // responsive to incoming message fanouts during the local send loop.
   publishClient.publish('messages', JSON.stringify({
     serverId,
     pubTs: Date.now(),
     msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
   }));
+  setImmediate(() => {
+    fanoutAllChunked(data, excludeUserId).catch(err => console.error('local fanout_all error:', err));
+  });
+}
+
+// Walks the local users Map sending `data` to every conn (optionally
+// excluding excludeUserId), yielding back to the event loop every 50 sends.
+// At ~750 conns per WS node, an unyielded loop blocks the event loop for
+// several ms — long enough that incoming message-fanout pub/sub callbacks
+// queue behind it. Yielding lets messages interleave during the long fanout.
+const FANOUT_CHUNK = 50;
+async function fanoutAllChunked(data, excludeUserId) {
+  let count = 0;
+  for (const [uid, conns] of users.entries()) {
+    if (excludeUserId && uid === excludeUserId) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+      if (++count % FANOUT_CHUNK === 0) {
+        await new Promise(setImmediate);
+      }
+    }
+  }
 }
 
 async function getCoCommunityUserIds(userId) {
