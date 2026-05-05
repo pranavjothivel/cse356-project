@@ -72,6 +72,11 @@ jobs:
       NODE_NAME: ${{ matrix.node.name }}
       NODE_IP: ${{ matrix.node.ip }}
       HA_SERVER: ${{ matrix.node.ha_server }}
+      # ws_only nodes live in the app_ws_servers backend, others in app_servers.
+      # The drain/re-enable steps need this to target the right pool when
+      # cycling a node — without it, drain commands silently no-op on the wrong
+      # backend and WS connections get killed ungracefully on PM2 reload.
+      HA_BACKEND: ${{ matrix.node.ws_only && 'app_ws_servers' || 'app_servers' }}
       SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes
     steps:
       - uses: actions/checkout@v4
@@ -90,18 +95,18 @@ jobs:
           # HAProxy threads run hot under load; that combo causes intermittent
           # SYN-queue overflow → kernel RST → "Connection reset by peer" on
           # ssh root@LB. Retry up to 5 times with backoff to ride those out.
-          echo "Draining $HA_SERVER (cap ${DRAIN_WAIT}s, exit early on scur≤5 or scur stable for 3 polls)..."
+          echo "Draining $HA_BACKEND/$HA_SERVER (cap ${DRAIN_WAIT}s, exit early on scur≤5 or scur stable for 3 polls)..."
           SCRIPT=$(cat <<'REMOTE'
           set -eu
-          HA="$1"; CAP="$2"
+          HA="$1"; CAP="$2"; BACKEND="$3"
           sock=/run/haproxy/admin.sock
-          echo "set server app_servers/$HA state drain" | socat stdio "$sock"
+          echo "set server $BACKEND/$HA state drain" | socat stdio "$sock"
           deadline=$(( $(date +%s) + CAP ))
           prev=-1
           stable=0
           while :; do
             scur=$(echo 'show stat' | socat stdio "$sock" \
-              | awk -F, -v s="$HA" '$1=="app_servers" && $2==s {print $5; exit}')
+              | awk -F, -v s="$HA" -v b="$BACKEND" '$1==b && $2==s {print $5; exit}')
             scur=${scur:-0}
             now=$(date +%s)
             echo "  scur=$scur (deadline in $(( deadline - now ))s)"
@@ -128,7 +133,7 @@ jobs:
           REMOTE
           )
           for attempt in 1 2 3 4 5; do
-            if $SSH -o ConnectTimeout=10 root@$LB "bash -s '$HA_SERVER' '$DRAIN_WAIT'" <<<"$SCRIPT"; then
+            if $SSH -o ConnectTimeout=10 root@$LB "bash -s '$HA_SERVER' '$DRAIN_WAIT' '$HA_BACKEND'" <<<"$SCRIPT"; then
               exit 0
             fi
             echo "::warning::ssh root@LB drain failed (attempt $attempt/5) — retrying in 5s..."
@@ -167,12 +172,16 @@ jobs:
           }
 
           push_env() {
-            # Per-node WORKER_ROLE: 'ws' if ws_only:true in nodes.yml, else 'all'.
-            # app.js reads this and conditionally mounts API routes / spawns the
-            # WebSocket server. WS-only nodes return 503 + Retry-After for any
-            # /api/* request so HAProxy `option redispatch` can route elsewhere.
+            # Per-node WORKER_ROLE based on flags in nodes.yml:
+            #   ws_only:true  → WORKER_ROLE=ws   (skip API mounts)
+            #   api_only:true → WORKER_ROLE=http (skip WS server + Redis subscribe)
+            #   neither       → WORKER_ROLE=all  (legacy / dev / mixed nodes)
+            # Avoiding 'all' on dedicated API nodes saves ~50% of pub/sub
+            # subscriber bandwidth (no idle Redis subscribers receiving the
+            # ~180KB recipient-list payload at p99 just to discard it locally).
             worker_role="all"
             if [ "${{ matrix.node.ws_only }}" = "true" ]; then worker_role="ws"; fi
+            if [ "${{ matrix.node.api_only }}" = "true" ]; then worker_role="http"; fi
             printf '%s\nWORKER_ROLE=%s\n' "$ENV_FILE" "$worker_role" | \
               $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
           }
@@ -442,12 +451,12 @@ jobs:
       - name: Re-enable in HAProxy
         if: always()
         run: |
-          echo "Re-enabling $HA_SERVER in HAProxy..."
+          echo "Re-enabling $HA_BACKEND/$HA_SERVER in HAProxy..."
           # Same retry as the drain step — the LB's sshd accept queue can
           # overflow under autograder load and produce a transient RST.
           for attempt in 1 2 3 4 5; do
             if $SSH -o ConnectTimeout=10 root@$LB \
-                "echo 'set server app_servers/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"; then
+                "echo 'set server $HA_BACKEND/$HA_SERVER state ready' | socat stdio /run/haproxy/admin.sock"; then
               exit 0
             fi
             echo "::warning::ssh root@LB re-enable failed (attempt $attempt/5) — retrying in 5s..."

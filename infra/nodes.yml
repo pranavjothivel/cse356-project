@@ -1,16 +1,22 @@
 app_nodes:
+  # API-only nodes — no WS server, no Redis pub/sub subscriber. Saves the
+  # cost of every WS broadcast event (~180KB at p99) being deserialized and
+  # iterated by an empty local users Map.
   - name: group1-api-node-01
     ip: 130.245.136.217
     private_ip: 10.0.3.93
     type: 8vcpu-16gb
+    api_only: true
   - name: group1-api-node-02
     ip: 130.245.136.149
     private_ip: 10.0.1.121
     type: 8vcpu-16gb
+    api_only: true
   - name: group1-api-node-03
     ip: 130.245.136.239
     private_ip: 10.0.0.177
     type: 2vcpu-4gb
+    api_only: true
   - name: group1-api-node-04
     ip: 130.245.136.223
     private_ip: 10.0.3.44
