@@ -267,6 +267,10 @@ router.get('/', async (req, res, next) => {
 //   kind:              'channel' | 'conversation'
 //   reqId:             X-Request-ID injected by HAProxy (for correlation)
 //   recipients:        member count (broadcast cost scales with this)
+//   mw_json_ms:        cors + body parser (req entry → after express.json/urlencoded)
+//   mw_session_ms:     express-session lookup (Redis via connect-redis)
+//   mw_passport_ms:    passport.initialize + passport.session deserializeUser
+//   mw_total_ms:       full pre-handler middleware (req entry → end of passport)
 //   auth_ms:           membership check
 //   msg_create_ms:     Message.create() — INSERT incl. pool acquire
 //   to_response_ms:    handler entry → res.json() (sender-visible cost)
@@ -338,9 +342,15 @@ router.post('/', async (req, res, next) => {
           broadcastToUsers(otherMemberIds, { type: 'channel.unread', channelId });
         }
         const bcast_pub_ms = Date.now() - tPub;
+        const T = req.timings || {};
+        const mw_json_ms     = T.json     ? T.json     - T.entry   : 0;
+        const mw_session_ms  = T.session  ? T.session  - T.json    : 0;
+        const mw_passport_ms = T.passport ? T.passport - T.session : 0;
+        const mw_total_ms    = T.passport ? T.passport - T.entry   : 0;
         console.log(JSON.stringify({
           evt: 'msg_post', kind: 'channel', reqId,
           recipients: memberIds.length,
+          mw_json_ms, mw_session_ms, mw_passport_ms, mw_total_ms,
           auth_ms, msg_create_ms, to_response_ms,
           bcast_members_ms, bcast_pub_ms,
           bcast_total_ms: Date.now() - tBcast,

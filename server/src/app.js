@@ -104,6 +104,12 @@ app.get('/api/metrics', (req, res, next) => {
 // Middleware
 // ──────────────────────────────────────────────
 
+// Pre-handler stage timing. Markers are inserted around each meaningful
+// middleware so route handlers can compute deltas via req.timings and log
+// them alongside handler-internal timings (see routes/messages.js). Cost is
+// 4 × Date.now() + property assigns per request.
+app.use((req, res, next) => { req.timings = { entry: Date.now() }; next(); });
+
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL
@@ -112,6 +118,7 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => { req.timings.json = Date.now(); next(); });
 
 // Sessions stored in Postgres — each session is independent.
 // Signing out destroys only the one session row; other sessions are unaffected.
@@ -127,9 +134,11 @@ app.use(session({
     maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
   },
 }));
+app.use((req, res, next) => { req.timings.session = Date.now(); next(); });
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use((req, res, next) => { req.timings.passport = Date.now(); next(); });
 
 // Attach request-level span attributes not covered by auto-instrumentation:
 // - client.address:           real client IP (OTel semconv; respects HAProxy X-Forwarded-For)
