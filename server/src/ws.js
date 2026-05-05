@@ -51,6 +51,21 @@ function handleSubMessage(raw) {
 
     const msg = envelope.msg;
 
+    // Time from publisher's pre-publish Date.now() to this callback firing.
+    // Captures Redis pub/sub round-trip + this worker's event-loop queue time.
+    // If the WS event loop is busy (lock storms, large fanouts, GC), incoming
+    // pub/sub messages sit in libuv's recv queue with no upper bound until the
+    // loop drains. That delay is invisible to ws_fanout/ws_ack instrumentation
+    // (which only times the handler once it actually runs). Tagged by msg.type
+    // so we can tell which path is queueing.
+    if (envelope.pubTs) {
+      console.log(JSON.stringify({
+        evt: 'pubsub_propagation',
+        type: msg.type,
+        propagation_ms: Date.now() - envelope.pubTs,
+      }));
+    }
+
     if (msg.type === "presence") {
       let conns = users.get(msg.id);
       if (!conns) return; // Nothing to do if no connections
@@ -311,6 +326,7 @@ function broadcastToUsers(userIds, payload) {
 
   publishClient.publish('messages', JSON.stringify({
     serverId,
+    pubTs: Date.now(),
     msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload },
   }));
 
@@ -339,6 +355,7 @@ function notifyUserAwayFrame(userId, value) {
   // Cross-server fanout
   publishClient.publish('messages', JSON.stringify({
     serverId,
+    pubTs: Date.now(),
     msg: { id: userId, type: 'presence', value },
   }));
 }
@@ -360,6 +377,7 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   // Cross-server fanout
   publishClient.publish('messages', JSON.stringify({
     serverId,
+    pubTs: Date.now(),
     msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
   }));
 }
