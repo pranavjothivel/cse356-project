@@ -19,6 +19,12 @@ app_nodes:
     ip: 130.245.136.72
     private_ip: 10.0.3.79
     type: 8vcpu-16gb
+    # Pinned to handle WebSocket traffic exclusively. HAProxy routes /ws/*
+    # to this node only via the app_ws_servers backend. Setting this flag
+    # makes the deploy pipeline inject WORKER_ROLE=ws into this node's .env,
+    # which causes app.js to skip mounting /api/* routes (returning 503 with
+    # Retry-After for any /api request that races during the deploy window).
+    ws_only: true
 
 lb_node: 130.245.136.254
 telemetry_node: 130.245.136.96

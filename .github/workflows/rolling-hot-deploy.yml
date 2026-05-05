@@ -167,7 +167,14 @@ jobs:
           }
 
           push_env() {
-            printf '%s' "$ENV_FILE" | $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
+            # Per-node WORKER_ROLE: 'ws' if ws_only:true in nodes.yml, else 'all'.
+            # app.js reads this and conditionally mounts API routes / spawns the
+            # WebSocket server. WS-only nodes return 503 + Retry-After for any
+            # /api/* request so HAProxy `option redispatch` can route elsewhere.
+            worker_role="all"
+            if [ "${{ matrix.node.ws_only }}" = "true" ]; then worker_role="ws"; fi
+            printf '%s\nWORKER_ROLE=%s\n' "$ENV_FILE" "$worker_role" | \
+              $SSH deploy@$NODE_IP "mkdir -p /srv/app && cat > /srv/app/.env"
           }
           rsync_code() {
             rsync -az --delete \
