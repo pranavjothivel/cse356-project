@@ -382,10 +382,28 @@ async function getCoCommunityUserIds(userId) {
 }
 
 /**
+ * Per-worker in-process cache of presence audiences. Keyed by userId,
+ * value = { audience, expires }. Audience is the union of co-community
+ * members + conversation participants (computed by the uncached path
+ * below). Audiences are stable on the second-to-minute timescale —
+ * community joins/leaves are rare events — so a 30s TTL is a safe trade
+ * for the much-larger reduction in PG load.
+ *
+ * Sizing math: ~1K active users × ~100 audience IDs (UUID strings, ~36B)
+ * ≈ 3.6 MB per worker. Far below any threshold worth evicting at, so we
+ * leave the Map unbounded and let the TTL prune naturally on next read.
+ */
+const presenceAudienceCache = new Map();
+const PRESENCE_AUDIENCE_TTL_MS = 30_000;
+
+/**
  * Get all user IDs who should see this user's presence changes:
- * co-community members + conversation (DM/group) partners.
+ * co-community members + conversation (DM/group) partners. Cached.
  */
 async function getPresenceAudienceUserIds(userId) {
+  const cached = presenceAudienceCache.get(userId);
+  if (cached && cached.expires > Date.now()) return cached.audience;
+
   const [communityUserIds, convParts] = await Promise.all([
     getCoCommunityUserIds(userId),
     ConversationParticipant.findAll({
@@ -406,20 +424,27 @@ async function getPresenceAudienceUserIds(userId) {
     convUserIds = coParticipants.map(p => p.user_id);
   }
 
-  return [...new Set([...communityUserIds, ...convUserIds])];
+  const audience = [...new Set([...communityUserIds, ...convUserIds])];
+  presenceAudienceCache.set(userId, { audience, expires: Date.now() + PRESENCE_AUDIENCE_TTL_MS });
+  return audience;
 }
 
 /**
- * Broadcast a presence.changed event to all users who share a community or
- * conversation with the subject user. Replaces the old broadcastToAllConnected
- * approach which sent presence to every connected user in the cluster.
+ * Broadcast a presence.changed event to users who share a community or
+ * conversation with the subject. Previously this called broadcastToAllConnected
+ * (despite the comment claiming otherwise) which sent presence to every
+ * connected user cluster-wide — at our scale that was ~90K WS frames/sec
+ * just for presence vs ~50/sec for actual messages, monopolizing the WS
+ * event loop and inflating delivery p95.
  */
 async function broadcastPresenceChange(userId, presence) {
-  broadcastToAllConnected({
+  const audienceIds = await getPresenceAudienceUserIds(userId);
+  if (audienceIds.length === 0) return;
+  broadcastToUsers(audienceIds, {
     type: 'presence.changed',
     userId,
-    presence
-  }, { excludeUserId: userId });
+    presence,
+  });
 }
 
 
