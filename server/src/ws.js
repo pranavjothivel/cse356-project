@@ -439,21 +439,22 @@ async function getPresenceAudienceUserIds(userId) {
 }
 
 /**
- * Broadcast a presence.changed event to users who share a community or
- * conversation with the subject. Previously this called broadcastToAllConnected
- * (despite the comment claiming otherwise) which sent presence to every
- * connected user cluster-wide — at our scale that was ~90K WS frames/sec
- * just for presence vs ~50/sec for actual messages, monopolizing the WS
- * event loop and inflating delivery p95.
+ * Broadcast a presence.changed event. Spec only requires recipients who share
+ * a community/DM/GM with the subject — but instructor confirmed sending to
+ * extra users is "not wrong, just unnecessary" (Piazza). Going wide because
+ * the per-event subscriber cost is much smaller than the audience-scoped
+ * variant: a flat fanout_all envelope is ~100 bytes vs ~40 KB-700 KB when
+ * we send the userIds list, and subscribers iterate their local users Map
+ * (~few hundred entries on a WS node) instead of running bufferToUUIDs on a
+ * 32k-element list. Audience-scoping (3000d2c) inflated subscriber processing
+ * on the WS event loop and triggered the 13s p95 spikes; this restores the
+ * cheaper per-event path the cluster ran on through 4/27-4/28.
  */
 async function broadcastPresenceChange(userId, presence) {
-  const audienceIds = await getPresenceAudienceUserIds(userId);
-  if (audienceIds.length === 0) return;
-  broadcastToUsers(audienceIds, {
-    type: 'presence.changed',
-    userId,
-    presence,
-  });
+  broadcastToAllConnected(
+    { type: 'presence.changed', userId, presence },
+    { excludeUserId: userId }
+  );
 }
 
 
