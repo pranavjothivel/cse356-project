@@ -400,9 +400,14 @@ const PRESENCE_AUDIENCE_TTL_MS = 30_000;
  * co-community members + conversation (DM/group) partners. Cached.
  */
 async function getPresenceAudienceUserIds(userId) {
+  const t0 = Date.now();
   const cached = presenceAudienceCache.get(userId);
-  if (cached && cached.expires > Date.now()) return cached.audience;
+  if (cached && cached.expires > Date.now()) {
+    console.log(JSON.stringify({ evt: 'audience', hit: true, ms: Date.now() - t0, size: cached.audience.length }));
+    return cached.audience;
+  }
 
+  const tQ1 = Date.now();
   const [communityUserIds, convParts] = await Promise.all([
     getCoCommunityUserIds(userId),
     ConversationParticipant.findAll({
@@ -411,9 +416,12 @@ async function getPresenceAudienceUserIds(userId) {
       raw: true,
     }),
   ]);
+  const q1_ms = Date.now() - tQ1;
 
   let convUserIds = [];
+  let q2_ms = 0;
   if (convParts.length > 0) {
+    const tQ2 = Date.now();
     const convIds = convParts.map(p => p.conversation_id);
     const coParticipants = await ConversationParticipant.findAll({
       attributes: ['user_id'],
@@ -421,10 +429,12 @@ async function getPresenceAudienceUserIds(userId) {
       raw: true,
     });
     convUserIds = coParticipants.map(p => p.user_id);
+    q2_ms = Date.now() - tQ2;
   }
 
   const audience = [...new Set([...communityUserIds, ...convUserIds])];
   presenceAudienceCache.set(userId, { audience, expires: Date.now() + PRESENCE_AUDIENCE_TTL_MS });
+  console.log(JSON.stringify({ evt: 'audience', hit: false, ms: Date.now() - t0, q1_ms, q2_ms, size: audience.length, conv_count: convParts.length }));
   return audience;
 }
 
