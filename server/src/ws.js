@@ -20,14 +20,13 @@ const jwt = require('jsonwebtoken');
     try { await release(); } catch (e) {}
   }
 */
-const { lock } = require('simple-redis-mutex');
 const lockOptions = { timeout: 500, pollingInterval: 50 };
 
 const { Op } = require('sequelize');
 const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
 const ConversationParticipant = require('./models/ConversationParticipant');
-const { redisClient, presenceClient } = require('./redis');
+const { redisClient, presenceClient, lock } = require('./redis');
 const { createClient } = require('redis');
 
 // Identifier that should be sent when publishing through Redis
@@ -480,7 +479,7 @@ const configureWSServer = (wss) => {
 
           if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
 
-          release = await lock(redisClient, `lock:users:${id}`, lockOptions);
+          release = await lock(`lock:users:${id}`, lockOptions, 'ws_presence_msg');
           const conns = users.get(id);
           const raw = await presenceClient.hGet(`users:${id}`, "body");
           if (!raw) {
@@ -581,7 +580,7 @@ const configureWSServer = (wss) => {
 
       let release = async () => {};
       try {
-        release = await lock(redisClient, `lock:users:${id}`, lockOptions);
+        release = await lock(`lock:users:${id}`, lockOptions, 'ws_close');
         const raw = await presenceClient.hGet(`users:${id}`, "body");
         if (!raw) {
           // Already cleaned up (e.g. by a concurrent close)
@@ -659,7 +658,7 @@ const configureWSServer = (wss) => {
 
       let initRelease = async () => {};
       try {
-        initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
+        initRelease = await lock(`lock:users:${id}`, lockOptions, 'ws_init');
         const existingStr = await presenceClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;

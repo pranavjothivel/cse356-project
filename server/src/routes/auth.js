@@ -4,7 +4,7 @@ const passport = require('passport');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const path = require('path');
-const { lock } = require('simple-redis-mutex');
+const { lock } = require('../redis');
 
 const User = require('../models/User');
 const { minioClient, BUCKET } = require('../upload');
@@ -298,7 +298,7 @@ router.post('/settings/update-profile', requireAuth, async (req, res, next) => {
     // the broadcast. Spec: away overrides online/idle.
     if (awayChanged) {
       const userId = req.user.id;
-      release = await lock(redisClient, `lock:users:${userId}`, lockOptions);
+      release = await lock(`lock:users:${userId}`, lockOptions, 'rest_settings_away');
       let finalPresence = away ? 'away' : 'online';
       const raw = await presenceClient.hGet(`users:${userId}`, 'body');
       if (raw) {
