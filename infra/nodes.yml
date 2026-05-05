@@ -15,15 +15,16 @@ app_nodes:
   - name: group1-api-node-03
     ip: 130.245.136.239
     private_ip: 10.0.0.177
-    type: 2vcpu-4gb
+    type: 8vcpu-16gb
+    # Resized 2026-05-05 from 2vcpu-4gb. All 3 API nodes are now uniform.
     api_only: true
   - name: group1-api-node-04
     ip: 130.245.136.223
     private_ip: 10.0.3.44
-    type: 4vcpu-8gb
-    # Resized 2026-05-05 from 2vcpu-4gb and reassigned to WebSocket pool
-    # alongside node-05 to eliminate the WS SPOF. Same WORKER_ROLE=ws flag
-    # mechanics — deploy pipeline injects it via .env.
+    type: 8vcpu-16gb
+    # Resized 2026-05-05 from 2vcpu-4gb → 4vcpu-8gb → 8vcpu-16gb. Pinned to
+    # the WS pool alongside node-05; both are now 8c/16g so the pool is
+    # symmetric. WORKER_ROLE=ws is injected via .env by the deploy pipeline.
     ws_only: true
   - name: group1-api-node-05
     ip: 130.245.136.72
