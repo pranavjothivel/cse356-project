@@ -468,11 +468,38 @@ async function getPresenceAudienceUserIds(userId) {
  * on the WS event loop and triggered the 13s p95 spikes; this restores the
  * cheaper per-event path the cluster ran on through 4/27-4/28.
  */
+// Per-user debounce on presence broadcasts. broadcastToAllConnected fans out
+// 1 frame to every locally-connected user on every WS node, so each call
+// costs ~N_users sends cluster-wide. Rapid bursts (e.g. tab focus toggling
+// online → idle → online in 200ms) used to fire 3 fanouts back-to-back;
+// debouncing collapses them to 1 carrying the latest state. Spec-allowed
+// per Piazza (Mike Ferdman: "Latest correct state should be fine, but
+// there shouldn't be 'too much' of a delay between a change and when it
+// gets emitted") — 250ms is well under "too much."
+//
+// Map keyed by userId; entry stores the latest pending presence value and
+// the setTimeout handle. While an entry exists, additional calls for that
+// user just overwrite `latest` and return — only the latest state is
+// broadcast when the timer fires. Map drains naturally as timers fire;
+// bounded by the number of users with pending events.
+const presenceDebounce = new Map();
+const PRESENCE_DEBOUNCE_MS = 250;
+
 async function broadcastPresenceChange(userId, presence) {
-  broadcastToAllConnected(
-    { type: 'presence.changed', userId, presence },
-    { excludeUserId: userId }
-  );
+  const existing = presenceDebounce.get(userId);
+  if (existing) {
+    existing.latest = presence;
+    return;
+  }
+  const entry = { latest: presence, timer: null };
+  entry.timer = setTimeout(() => {
+    presenceDebounce.delete(userId);
+    broadcastToAllConnected(
+      { type: 'presence.changed', userId, presence: entry.latest },
+      { excludeUserId: userId }
+    );
+  }, PRESENCE_DEBOUNCE_MS);
+  presenceDebounce.set(userId, entry);
 }
 
 
