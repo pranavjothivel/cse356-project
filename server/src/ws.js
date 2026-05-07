@@ -113,15 +113,34 @@ function bufferToUUIDs(buffer) {
 }
 
 /**
- * Initialize the Redis subscriber. Must be awaited from app startup before
- * the HTTP server begins accepting requests — otherwise fanout_all messages
- * published by other workers during the startup window would be dropped.
+ * Connect the Redis publish client. MUST be called on every worker that
+ * runs REST handlers (POST /api/messages, conversations/*, channels/*),
+ * because broadcastToUsers() calls publishClient.publish() fire-and-forget.
+ * On a never-connected client, that call returns silently without sending,
+ * so cross-node WS broadcasts disappear into a black hole.
+ *
+ * Cheap: one TCP connection to Redis, no subscription overhead. Safe to
+ * call on api_only nodes that never accept WS connections themselves.
  */
-async function initWS() {
+async function initWSPublisher() {
   await publishClient.connect();
+  console.log("Redis publisher connected");
+}
+
+/**
+ * Connect the Redis subscriber and register the cross-node fanout handler.
+ * Only needed on workers that run a WebSocket.Server — otherwise we'd
+ * receive every cluster broadcast just to iterate an empty local users Map
+ * and discard. ~10MB/sec at our scale, worth skipping on api_only nodes.
+ *
+ * Must be awaited from app startup before the HTTP server begins accepting
+ * requests — otherwise fanout_all messages published by other workers
+ * during the startup window would be dropped.
+ */
+async function initWSSubscriber() {
   await subClient.connect();
   await subClient.subscribe('messages', handleSubMessage);
-  console.log("Redis publisher and subscriber connected");
+  console.log("Redis subscriber connected");
 }
 
 // ──────────────────────────────────────────────
@@ -197,24 +216,64 @@ const connections = new Map();
  * Deliver a payload to every local WS connection of the given user ids.
  * Used by both the Redis fanout subscriber and the local-side of broadcastToUsers.
  *
- * Per-fanout timing is logged when either the recipients list is large
- * (>= 50) or the fanout itself is slow (>= 5ms), to keep log volume sane.
- *   evt: 'ws_fanout'
- *   recipients: userIds passed in (full member list, before local filter)
- *   delivered: count with at least one local conn
- *   frames: total ws.send() calls (delivered users × their conn count)
- *   ms: wall time for the function
+ * Two log lines per interesting fanout:
+ *
+ *   evt: 'ws_fanout' — synchronous fanout-loop wall time (fast path)
+ *     recipients: userIds passed in (full member list, before local filter)
+ *     delivered:  count with at least one local conn
+ *     frames:     total ws.send() calls (delivered users × their conn count)
+ *     ms:         wall time for the synchronous loop
+ *
+ *   evt: 'ws_fanout_ack' — write-completion timing (the unmeasured WS-egress segment)
+ *     recipients, delivered, frames as above
+ *     acks:        number of send() callbacks that fired
+ *     max_ack_ms:  slowest ack across all frames in this fanout (= worst-client tail)
+ *     avg_ack_ms:  mean ack time across this fanout's frames
+ *     fanout_ms:   wall time from t0 to last ack
+ *
+ * `ws.send(data, cb)` invokes cb after the frame has been encoded and the
+ * underlying socket.write() has flushed (kernel send buffer accepted) — NOT
+ * receiver ACK. Slow clients with full kernel send buffers show up here.
+ *
+ * Logged only when (a) recipients >= 50 or (b) max ack >= 50ms, to keep
+ * log volume bounded. ackState lives in a closure per fanout — one heap
+ * alloc per broadcast, GC'd once last ack fires.
  */
 function deliverLocal(userIds, payload) {
   const t0 = Date.now();
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
   let delivered = 0, frames = 0;
+  const ackState = { expected: 0, received: 0, sumMs: 0, maxMs: 0 };
   for (const userId of userIds) {
     const conns = users.get(userId);
     if (!conns) continue;
     delivered++;
     for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(data); frames++; } catch (e) { /* ignore broken socket */ }
+      const tSend = Date.now();
+      try {
+        ackState.expected++;
+        conns[cid].send(data, () => {
+          const ms = Date.now() - tSend;
+          ackState.received++;
+          ackState.sumMs += ms;
+          if (ms > ackState.maxMs) ackState.maxMs = ms;
+          if (ackState.received === ackState.expected && (userIds.length >= 50 || ackState.maxMs >= 50)) {
+            console.log(JSON.stringify({
+              evt: 'ws_fanout_ack',
+              recipients: userIds.length,
+              delivered, frames: ackState.expected,
+              acks: ackState.received,
+              max_ack_ms: ackState.maxMs,
+              avg_ack_ms: Math.round(ackState.sumMs / ackState.received),
+              fanout_ms: Date.now() - t0,
+            }));
+          }
+        });
+        frames++;
+      } catch (e) {
+        ackState.expected--; // rollback so the ackState.received === ackState.expected guard remains valid
+        /* ignore broken socket */
+      }
     }
   }
   const ms = Date.now() - t0;
@@ -666,7 +725,8 @@ module.exports = {
   broadcastPresenceChange,
   notifyUserAwayFrame,
   getCoCommunityUserIds,
-  initWS,
+  initWSPublisher,
+  initWSSubscriber,
   withUserPresenceLock,
   lockOptions
 };
