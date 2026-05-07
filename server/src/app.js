@@ -45,6 +45,30 @@ app.set('trust proxy', 1);
 const WORKER_ROLE = process.env.WORKER_ROLE || 'all';
 console.log(`WORKER_ROLE=${WORKER_ROLE}`);
 
+// Event-loop-lag telemetry. Off by default; flip on with LOG_EL_LAG=1 in the
+// worker env to emit a JSON line every 5 s with p50/p99/max event-loop delay.
+// Used to attribute Delivery-p95 spikes: lag stays low during a spike → root
+// cause is outside the worker (Redis stall, network, LB). lag jumps to seconds
+// → root cause is inside the worker (GC, sync work, hot loop).
+{
+  const { monitorEventLoopDelay } = require('perf_hooks');
+  const elLag = monitorEventLoopDelay({ resolution: 10 });
+  elLag.enable();
+  setInterval(() => {
+    if (process.env.LOG_EL_LAG === '1') {
+      console.log(JSON.stringify({
+        evt: 'el_lag',
+        role: WORKER_ROLE,
+        pid: process.pid,
+        p50_ms: Math.round(elLag.percentile(50) / 1e6),
+        p99_ms: Math.round(elLag.percentile(99) / 1e6),
+        max_ms: Math.round(elLag.max / 1e6),
+      }));
+    }
+    elLag.reset();
+  }, 5000).unref();
+}
+
 
 /**
  * route -> { reqs (number of requests), sumResponse (sum of response times), 
@@ -113,12 +137,6 @@ app.get('/api/metrics', (req, res, next) => {
 // Middleware
 // ──────────────────────────────────────────────
 
-// Pre-handler stage timing. Markers are inserted around each meaningful
-// middleware so route handlers can compute deltas via req.timings and log
-// them alongside handler-internal timings (see routes/messages.js). Cost is
-// 4 × Date.now() + property assigns per request.
-app.use((req, res, next) => { req.timings = { entry: Date.now() }; next(); });
-
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL
@@ -127,7 +145,6 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use((req, res, next) => { req.timings.json = Date.now(); next(); });
 
 // Sessions stored in Postgres — each session is independent.
 // Signing out destroys only the one session row; other sessions are unaffected.
@@ -143,11 +160,9 @@ app.use(session({
     maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
   },
 }));
-app.use((req, res, next) => { req.timings.session = Date.now(); next(); });
 
 app.use(passport.initialize());
 app.use(passport.session());
-app.use((req, res, next) => { req.timings.passport = Date.now(); next(); });
 
 // Attach request-level span attributes not covered by auto-instrumentation:
 // - client.address:           real client IP (OTel semconv; respects HAProxy X-Forwarded-For)

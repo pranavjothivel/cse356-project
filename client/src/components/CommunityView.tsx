@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useContext, useRef } from "react";
 import { apiFetch, apiPost, apiDelete } from "../api";
+import AuthContext from "../auth";
 import ChannelList from "./ChannelList";
 import ChannelView from "./ChannelView";
 import MemberList from "./MemberList";
@@ -25,10 +26,17 @@ interface Props {
 }
 
 export default function CommunityView({ communityId, onLeft }: Props) {
+  const { auth } = useContext(AuthContext);
+  const myId: string | undefined = auth.user?.id;
   const [data, setData] = useState<CommunityData | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [jumpToMessageId, setJumpToMessageId] = useState<string | null>(null);
+
+  // Tracked via ref so the WS event handler (registered once) can read the
+  // currently-selected channel without being re-registered on every selection.
+  const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
+  useEffect(() => { selectedChannelIdRef.current = selectedChannelId; }, [selectedChannelId]);
 
   const fetchData = useCallback(async () => {
     const res = await apiFetch(`/communities/${communityId}`);
@@ -44,12 +52,18 @@ export default function CommunityView({ communityId, onLeft }: Props) {
     fetchData();
   }, [communityId, fetchData]);
 
-  // Handle real-time unread/read updates for channels
+  // Handle real-time unread/read updates for channels.
+  // Unread is derived from channel.message.created (server no longer emits a
+  // separate channel.unread frame — saves one cluster-wide pub/sub publish per
+  // message). Skip the currently-selected channel (ChannelView auto-marks-read
+  // on arrival) and skip the user's own messages.
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = (e as CustomEvent).detail;
       if (!ev?.type) return;
-      if (ev.type === 'channel.unread') {
+      if (ev.type === 'channel.message.created') {
+        if (ev.channelId === selectedChannelIdRef.current) return;
+        if (ev.message?.authorId === myId) return;
         setData(prev => prev ? {
           ...prev,
           channels: prev.channels.map(c => c.id === ev.channelId ? { ...c, hasUnread: true } : c),
@@ -63,7 +77,7 @@ export default function CommunityView({ communityId, onLeft }: Props) {
     };
     window.addEventListener('ws-event', handler);
     return () => window.removeEventListener('ws-event', handler);
-  }, []);
+  }, [myId]);
 
   if (!data) return <div className="channel-view"><p className="placeholder-text">Loading...</p></div>;
 
