@@ -12,7 +12,8 @@ All nodes are Linodes on the CSE356 course cluster (Clanode 4G unless noted).
 | `group1-api-node-04` | API app node (PM2 / Node.js) | `130.245.136.223` | `10.0.3.44` |
 | `group1-api-node-05` | API app node (PM2 / Node.js) — Clanode 16G | `130.245.136.72` | `10.0.3.79` |
 | `group1-db-psql-01` | PostgreSQL database | `130.245.136.224` | `10.0.1.235` |
-| `group1-db-redis-01` | Redis (sessions, pub/sub, presence) | `130.245.136.86` | `10.0.0.136` |
+| `group1-db-redis-01` | Redis (sessions, cache, presence) | `130.245.136.86` | `10.0.0.136` |
+| `group1-db-redis-02` | Redis (pub/sub for cross-node WS broadcast) — Clanode 32G | `130.245.136.207` | `10.0.0.106` |
 | `group1-web-lb01` | Load balancer + frontend (Nginx) | `130.245.136.254` | — |
 | `group1-telemetry-01` | Grafana Alloy telemetry node | `130.245.136.96` | `10.0.0.235` |
 
