@@ -67,7 +67,8 @@ AXIOM_TOKEN=           # Optional, for log shipping
 - **Nginx** (on LB) — serves React SPA from `/srv/frontend/dist/`
 - **4 app nodes** — PM2 cluster mode, ~2 workers each
 - **PostgreSQL** (`10.0.1.235`) — primary data store
-- **Redis** (`10.0.0.136`) — sessions, pub/sub, presence
+- **Redis (`group1-db-redis-01`, `10.0.0.136:6379`)** — sessions, cache, presence
+- **Redis (`group1-db-redis-02`, `10.0.0.106:6380`)** — pub/sub for cross-node WS broadcast (offloaded 2026-05-07 to isolate fanout traffic from session/cache load)
 
 Config files: `infra/haproxy/haproxy.cfg`, `infra/nginx/`, `infra/pgbouncer/`.
 

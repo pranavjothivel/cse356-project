@@ -29,12 +29,45 @@ const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
 const messagesRouter = require('./routes/messages');
 const { redisClient } = require('./redis');
-const { configureWSServer, initWS } = require('./ws');
+const { configureWSServer, initWSPublisher, initWSSubscriber } = require('./ws');
 
 const app = express();
 
 // Trust HAProxy — required for secure cookies and correct req.protocol behind a reverse proxy
 app.set('trust proxy', 1);
+
+// WORKER_ROLE: 'all' (default — serves both API and WS), 'http' (skip WS server),
+// or 'ws' (skip API route mounts). Set per-node via .env injected by the
+// rolling-hot-deploy workflow based on the `ws_only` flag in infra/nodes.yml.
+// Pinning WS to a dedicated node isolates the WS event loop from API request
+// bursts (large search responses, long-running queries) and lets us tune
+// resources independently for each workload.
+const WORKER_ROLE = process.env.WORKER_ROLE || 'all';
+console.log(`WORKER_ROLE=${WORKER_ROLE}`);
+
+// Event-loop-lag telemetry. Off by default; flip on with LOG_EL_LAG=1 in the
+// worker env to emit a JSON line every 5 s with p50/p99/max event-loop delay.
+// Used to attribute Delivery-p95 spikes: lag stays low during a spike → root
+// cause is outside the worker (Redis stall, network, LB). lag jumps to seconds
+// → root cause is inside the worker (GC, sync work, hot loop).
+{
+  const { monitorEventLoopDelay } = require('perf_hooks');
+  const elLag = monitorEventLoopDelay({ resolution: 10 });
+  elLag.enable();
+  setInterval(() => {
+    if (process.env.LOG_EL_LAG === '1') {
+      console.log(JSON.stringify({
+        evt: 'el_lag',
+        role: WORKER_ROLE,
+        pid: process.pid,
+        p50_ms: Math.round(elLag.percentile(50) / 1e6),
+        p99_ms: Math.round(elLag.percentile(99) / 1e6),
+        max_ms: Math.round(elLag.max / 1e6),
+      }));
+    }
+    elLag.reset();
+  }, 5000).unref();
+}
 
 
 /**
@@ -159,19 +192,34 @@ app.use(passport.session());
 // ──────────────────────────────────────────────
 // Routes
 // ──────────────────────────────────────────────
-app.use('/uploads', express.static(process.env.UPLOAD_DIR || 'uploads'));
-app.use('/api/upload', uploadRouter);
-app.use('/api/search', searchRouter);
-app.use('/api/auth', authRouter);
-app.use('/api/communities', communitiesRouter);
-app.use('/api/channels', channelsRouter);
-app.use('/api/conversations', conversationsRouter);
-app.use('/api/messages', messagesRouter);
-app.use('/api/users', usersRouter);
+// HAProxy health check (`option httpchk GET /`) needs a 200 from every node
+// regardless of role — defined unconditionally below so WS-only nodes still
+// pass the check.
 
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', user: req.user?.username || null });
-});
+if (WORKER_ROLE !== 'ws') {
+  app.use('/uploads', express.static(process.env.UPLOAD_DIR || 'uploads'));
+  app.use('/api/upload', uploadRouter);
+  app.use('/api/search', searchRouter);
+  app.use('/api/auth', authRouter);
+  app.use('/api/communities', communitiesRouter);
+  app.use('/api/channels', channelsRouter);
+  app.use('/api/conversations', conversationsRouter);
+  app.use('/api/messages', messagesRouter);
+  app.use('/api/users', usersRouter);
+
+  app.get('/', (req, res) => {
+    res.json({ status: 'ok', user: req.user?.username || null });
+  });
+} else {
+  // WS-only: HAProxy shouldn't route /api/* here, but during the deploy
+  // window between node reload and HAProxy reload, it may. Return 503 with
+  // Retry-After so HAProxy `option redispatch` + `retry-on` can route the
+  // request to a different backend instead of surfacing a 404 to the client.
+  app.get('/', (req, res) => res.json({ status: 'ok', role: 'ws' }));
+  app.use('/api', (req, res) => {
+    res.set('Retry-After', '1').status(503).json({ error: 'WS-only node — retry on another backend' });
+  });
+}
 
 // const Sentry = require('@sentry/node');
 // Sentry.setupExpressErrorHandler(app);
@@ -217,19 +265,31 @@ async function start() {
 
   await setupOidcStrategy();
 
-  // Connect + subscribe the Redis pub/sub subscriber before accepting any
-  // requests. If this fails the worker crashes and PM2 restarts it — much
-  // better than silently running with a dead subscriber that drops
-  // presence.changed fanout from the other node.
-  await initWS();
+  // Publisher is needed by REST handlers (broadcastToUsers in messages.js
+  // etc.) on EVERY node — including api_only nodes that don't accept WS
+  // connections themselves. Calling publishClient.publish() on a never-
+  // connected client silently drops the broadcast.
+  await initWSPublisher();
+
+  // Subscriber is only useful on workers that have local WS connections to
+  // deliver inbound broadcasts to. Skipping on api_only nodes saves the
+  // cost of receiving every cluster broadcast (~10MB/sec at our scale)
+  // just to iterate an empty local users Map and discard.
+  if (WORKER_ROLE !== 'http') {
+    await initWSSubscriber();
+  }
 
   const port = process.env.PORT || 3000;
 
-  // Run Express and WebSocket server on same port
+  // Run Express on the HTTP server unconditionally (needed for HAProxy
+  // health checks regardless of role). Attach the WebSocket server only
+  // when this worker handles WS traffic.
   const server = http.createServer(app);
-  const wss = new WebSocket.Server({ server });
-  configureWSServer(wss);
-  server.listen(port, () => console.log(`Server running on port ${port}`));
+  if (WORKER_ROLE !== 'http') {
+    const wss = new WebSocket.Server({ server });
+    configureWSServer(wss);
+  }
+  server.listen(port, () => console.log(`Server running on port ${port} (role=${WORKER_ROLE})`));
 }
 
 start().catch(err => { console.error('Failed to start:', err); process.exit(1); });

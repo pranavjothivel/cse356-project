@@ -20,18 +20,22 @@ const jwt = require('jsonwebtoken');
     try { await release(); } catch (e) {}
   }
 */
-const { lock } = require('simple-redis-mutex');
 const lockOptions = { timeout: 500, pollingInterval: 50 };
 
 const { Op } = require('sequelize');
 const User = require('./models/User');
 const CommunityMember = require('./models/CommunityMember');
 const ConversationParticipant = require('./models/ConversationParticipant');
-const { redisClient, presenceClient } = require('./redis');
+const { redisClient, presenceClient, lock } = require('./redis');
 const { createClient } = require('redis');
 
 // Identifier that should be sent when publishing through Redis
 const serverId = crypto.randomUUID();
+
+// True when this worker hosts a WebSocket server (i.e. has local connections
+// in the `users` Map). On api_only nodes (WORKER_ROLE=http) the local users
+// Map is always empty, so deliverLocal calls are pure overhead — skip them.
+const HAS_LOCAL_WS = process.env.WORKER_ROLE !== 'http';
 
 
 const publishClient = createClient({ url: process.env.REDIS_PUBLISH_URL });
@@ -73,17 +77,22 @@ function handleSubMessage(raw) {
         userIds = bufferToUUIDs(Buffer.from(msg.userIdsBuf, 'base64'));
       }
       // Generic per-user fanout published from any worker. Deliver locally only.
-      deliverLocal(userIds, msg.payload);
+      // Defer + chunk like fanout_all does — without yields, a burst of N
+      // queued pub/sub messages drains synchronously inside the subscribe
+      // callback, blocking the event loop for N × per-message-time. With
+      // chunking, message processing interleaves with everything else.
+      setImmediate(() => {
+        deliverLocalChunked(userIds, msg.payload).catch(err => console.error('fanout error:', err));
+      });
     }
     else if (msg.type === "fanout_all") {
-      // Broadcast payload to every locally connected user (optionally excluding one).
+      // Defer + chunk so message fanouts queued behind a large presence
+      // broadcast can interleave instead of waiting for the full ~750-conn
+      // loop to finish.
       const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
-      for (const [uid, conns] of users.entries()) {
-        if (msg.excludeUserId && uid === msg.excludeUserId) continue;
-        for (const cid of Object.keys(conns)) {
-          try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
-        }
-      }
+      setImmediate(() => {
+        fanoutAllChunked(data, msg.excludeUserId).catch(err => console.error('fanout_all error:', err));
+      });
     }
   }
   catch (err) {
@@ -113,15 +122,34 @@ function bufferToUUIDs(buffer) {
 }
 
 /**
- * Initialize the Redis subscriber. Must be awaited from app startup before
- * the HTTP server begins accepting requests — otherwise fanout_all messages
- * published by other workers during the startup window would be dropped.
+ * Connect the Redis publish client. MUST be called on every worker that
+ * runs REST handlers (POST /api/messages, conversations/*, channels/*),
+ * because broadcastToUsers() calls publishClient.publish() fire-and-forget.
+ * On a never-connected client, that call returns silently without sending,
+ * so cross-node WS broadcasts disappear into a black hole.
+ *
+ * Cheap: one TCP connection to Redis, no subscription overhead. Safe to
+ * call on api_only nodes that never accept WS connections themselves.
  */
-async function initWS() {
+async function initWSPublisher() {
   await publishClient.connect();
+  console.log("Redis publisher connected");
+}
+
+/**
+ * Connect the Redis subscriber and register the cross-node fanout handler.
+ * Only needed on workers that run a WebSocket.Server — otherwise we'd
+ * receive every cluster broadcast just to iterate an empty local users Map
+ * and discard. ~10MB/sec at our scale, worth skipping on api_only nodes.
+ *
+ * Must be awaited from app startup before the HTTP server begins accepting
+ * requests — otherwise fanout_all messages published by other workers
+ * during the startup window would be dropped.
+ */
+async function initWSSubscriber() {
   await subClient.connect();
   await subClient.subscribe('messages', handleSubMessage);
-  console.log("Redis publisher and subscriber connected");
+  console.log("Redis subscriber connected");
 }
 
 // ──────────────────────────────────────────────
@@ -196,34 +224,38 @@ const connections = new Map();
 /**
  * Deliver a payload to every local WS connection of the given user ids.
  * Used by both the Redis fanout subscriber and the local-side of broadcastToUsers.
- *
- * Per-fanout timing is logged when either the recipients list is large
- * (>= 50) or the fanout itself is slow (>= 5ms), to keep log volume sane.
- *   evt: 'ws_fanout'
- *   recipients: userIds passed in (full member list, before local filter)
- *   delivered: count with at least one local conn
- *   frames: total ws.send() calls (delivered users × their conn count)
- *   ms: wall time for the function
  */
 function deliverLocal(userIds, payload) {
-  const t0 = Date.now();
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  let delivered = 0, frames = 0;
   for (const userId of userIds) {
     const conns = users.get(userId);
     if (!conns) continue;
-    delivered++;
     for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(data); frames++; } catch (e) { /* ignore broken socket */ }
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
     }
   }
-  const ms = Date.now() - t0;
-  if (userIds.length >= 50 || ms >= 5) {
-    console.log(JSON.stringify({
-      evt: 'ws_fanout',
-      recipients: userIds.length,
-      delivered, frames, ms,
-    }));
+}
+
+/**
+ * Same as deliverLocal but yields back to the event loop every FANOUT_CHUNK
+ * sends so a burst of subscriber-side fanouts (e.g. 100+ pub/sub messages
+ * queued during a brief pause) can interleave instead of stalling the worker
+ * event loop for the entire drain. Mirrors `fanoutAllChunked` for the per-user
+ * fanout path. Caller is expected to invoke via setImmediate so the first
+ * iteration is also off the pub/sub callback's tick.
+ */
+async function deliverLocalChunked(userIds, payload) {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  let count = 0;
+  for (const userId of userIds) {
+    const conns = users.get(userId);
+    if (!conns) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+      if (++count % FANOUT_CHUNK === 0) {
+        await new Promise(setImmediate);
+      }
+    }
   }
 }
 
@@ -245,7 +277,12 @@ function broadcastToUsers(userIds, payload) {
   if (!userIds || userIds.length === 0) return;
   let date1 = Date.now();
 
-  deliverLocal(userIds, payload);
+  // Stringify payload exactly once. deliverLocal already accepts string;
+  // the publish envelope carries it as a string field so subscriber-side
+  // workers can pass it straight to deliverLocal without re-serializing.
+  const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+  if (HAS_LOCAL_WS) deliverLocal(userIds, payloadStr);
 
   const buf = Buffer.concat(
     userIds.map(u => Buffer.from(u.replace(/-/g, ''), 'hex'))
@@ -253,7 +290,7 @@ function broadcastToUsers(userIds, payload) {
 
   publishClient.publish('messages', JSON.stringify({
     serverId,
-    msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload },
+    msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload: payloadStr },
   }));
 
   let date2 = Date.now();
@@ -271,11 +308,13 @@ function broadcastToUsers(userIds, payload) {
  */
 function notifyUserAwayFrame(userId, value) {
   if (value !== 'away' && value !== 'unaway') return;
-  // Local delivery
-  const conns = users.get(userId);
-  if (conns) {
-    for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(value); } catch (e) { /* ignore broken socket */ }
+  // Local delivery (skip on api_only nodes — users Map is always empty)
+  if (HAS_LOCAL_WS) {
+    const conns = users.get(userId);
+    if (conns) {
+      for (const cid of Object.keys(conns)) {
+        try { conns[cid].send(value); } catch (e) { /* ignore broken socket */ }
+      }
     }
   }
   // Cross-server fanout
@@ -292,18 +331,39 @@ function notifyUserAwayFrame(userId, value) {
  */
 function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  // Local delivery
-  for (const [uid, conns] of users.entries()) {
-    if (uid === excludeUserId) continue;
-    for (const cid of Object.keys(conns)) {
-      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
-    }
-  }
-  // Cross-server fanout
+  // Cross-server fanout FIRST so other WS nodes can start work in parallel,
+  // then defer + chunk local delivery so this worker's event loop stays
+  // responsive to incoming message fanouts during the local send loop.
+  // Carry payload as already-stringified so subscriber-side workers don't
+  // re-serialize it; avoids a second JSON.stringify cluster-wide per event.
   publishClient.publish('messages', JSON.stringify({
     serverId,
-    msg: { type: 'fanout_all', payload, excludeUserId: excludeUserId || null },
+    msg: { type: 'fanout_all', payload: data, excludeUserId: excludeUserId || null },
   }));
+  if (HAS_LOCAL_WS) {
+    setImmediate(() => {
+      fanoutAllChunked(data, excludeUserId).catch(err => console.error('local fanout_all error:', err));
+    });
+  }
+}
+
+// Walks the local users Map sending `data` to every conn (optionally
+// excluding excludeUserId), yielding back to the event loop every 50 sends.
+// At ~750 conns per WS node, an unyielded loop blocks the event loop for
+// several ms — long enough that incoming message-fanout pub/sub callbacks
+// queue behind it. Yielding lets messages interleave during the long fanout.
+const FANOUT_CHUNK = 50;
+async function fanoutAllChunked(data, excludeUserId) {
+  let count = 0;
+  for (const [uid, conns] of users.entries()) {
+    if (excludeUserId && uid === excludeUserId) continue;
+    for (const cid of Object.keys(conns)) {
+      try { conns[cid].send(data); } catch (e) { /* ignore broken socket */ }
+      if (++count % FANOUT_CHUNK === 0) {
+        await new Promise(setImmediate);
+      }
+    }
+  }
 }
 
 async function getCoCommunityUserIds(userId) {
@@ -323,10 +383,28 @@ async function getCoCommunityUserIds(userId) {
 }
 
 /**
+ * Per-worker in-process cache of presence audiences. Keyed by userId,
+ * value = { audience, expires }. Audience is the union of co-community
+ * members + conversation participants (computed by the uncached path
+ * below). Audiences are stable on the second-to-minute timescale —
+ * community joins/leaves are rare events — so a 30s TTL is a safe trade
+ * for the much-larger reduction in PG load.
+ *
+ * Sizing math: ~1K active users × ~100 audience IDs (UUID strings, ~36B)
+ * ≈ 3.6 MB per worker. Far below any threshold worth evicting at, so we
+ * leave the Map unbounded and let the TTL prune naturally on next read.
+ */
+const presenceAudienceCache = new Map();
+const PRESENCE_AUDIENCE_TTL_MS = 30_000;
+
+/**
  * Get all user IDs who should see this user's presence changes:
- * co-community members + conversation (DM/group) partners.
+ * co-community members + conversation (DM/group) partners. Cached.
  */
 async function getPresenceAudienceUserIds(userId) {
+  const cached = presenceAudienceCache.get(userId);
+  if (cached && cached.expires > Date.now()) return cached.audience;
+
   const [communityUserIds, convParts] = await Promise.all([
     getCoCommunityUserIds(userId),
     ConversationParticipant.findAll({
@@ -347,20 +425,55 @@ async function getPresenceAudienceUserIds(userId) {
     convUserIds = coParticipants.map(p => p.user_id);
   }
 
-  return [...new Set([...communityUserIds, ...convUserIds])];
+  const audience = [...new Set([...communityUserIds, ...convUserIds])];
+  presenceAudienceCache.set(userId, { audience, expires: Date.now() + PRESENCE_AUDIENCE_TTL_MS });
+  return audience;
 }
 
 /**
- * Broadcast a presence.changed event to all users who share a community or
- * conversation with the subject user. Replaces the old broadcastToAllConnected
- * approach which sent presence to every connected user in the cluster.
+ * Broadcast a presence.changed event. Spec only requires recipients who share
+ * a community/DM/GM with the subject — but instructor confirmed sending to
+ * extra users is "not wrong, just unnecessary" (Piazza). Going wide because
+ * the per-event subscriber cost is much smaller than the audience-scoped
+ * variant: a flat fanout_all envelope is ~100 bytes vs ~40 KB-700 KB when
+ * we send the userIds list, and subscribers iterate their local users Map
+ * (~few hundred entries on a WS node) instead of running bufferToUUIDs on a
+ * 32k-element list. Audience-scoping (3000d2c) inflated subscriber processing
+ * on the WS event loop and triggered the 13s p95 spikes; this restores the
+ * cheaper per-event path the cluster ran on through 4/27-4/28.
  */
+// Per-user debounce on presence broadcasts. broadcastToAllConnected fans out
+// 1 frame to every locally-connected user on every WS node, so each call
+// costs ~N_users sends cluster-wide. Rapid bursts (e.g. tab focus toggling
+// online → idle → online in 200ms) used to fire 3 fanouts back-to-back;
+// debouncing collapses them to 1 carrying the latest state. Spec-allowed
+// per Piazza (Mike Ferdman: "Latest correct state should be fine, but
+// there shouldn't be 'too much' of a delay between a change and when it
+// gets emitted") — 250ms is well under "too much."
+//
+// Map keyed by userId; entry stores the latest pending presence value and
+// the setTimeout handle. While an entry exists, additional calls for that
+// user just overwrite `latest` and return — only the latest state is
+// broadcast when the timer fires. Map drains naturally as timers fire;
+// bounded by the number of users with pending events.
+const presenceDebounce = new Map();
+const PRESENCE_DEBOUNCE_MS = 250;
+
 async function broadcastPresenceChange(userId, presence) {
-  broadcastToAllConnected({
-    type: 'presence.changed',
-    userId,
-    presence
-  }, { excludeUserId: userId });
+  const existing = presenceDebounce.get(userId);
+  if (existing) {
+    existing.latest = presence;
+    return;
+  }
+  const entry = { latest: presence, timer: null };
+  entry.timer = setTimeout(() => {
+    presenceDebounce.delete(userId);
+    broadcastToAllConnected(
+      { type: 'presence.changed', userId, presence: entry.latest },
+      { excludeUserId: userId }
+    );
+  }, PRESENCE_DEBOUNCE_MS);
+  presenceDebounce.set(userId, entry);
 }
 
 
@@ -396,8 +509,16 @@ const configureWSServer = (wss) => {
 
           if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
 
-          release = await lock(redisClient, `lock:users:${id}`, lockOptions);
-          const conns = users.get(id);
+          // Effects collected inside the lock and applied AFTER release so the
+          // critical section is just hGet → mutate → hSet. Lock-wait p99 was
+          // ~146 ms with ws.send loops, publish, and broadcastPresenceChange
+          // all running while the lock was held; deferring them shrinks the
+          // window to a single Redis read-modify-write.
+          let framesToSend = null;       // [connId, "away"|"unaway"]
+          let crossServerAwayFrame = false;
+          let presenceChangedTo = null;  // string when finalPresence !== prev
+
+          release = await lock(`lock:users:${id}`, lockOptions);
           const raw = await presenceClient.hGet(`users:${id}`, "body");
           if (!raw) {
             await release();
@@ -408,20 +529,20 @@ const configureWSServer = (wss) => {
           const prevFinalPresence = redisUser.presence;
 
           if (newPresence === "away") {
-            // Set each of the user's connections to away and notify them.
+            framesToSend = [];
+            // Set each of the user's connections to away.
             // Remember each conn's pre-away idle/online state in `base`
             // so unaway can restore it instead of slamming every conn to
-            // 'online'.
+            // 'online'. The actual ws.send happens after release().
             Object.keys(redisUser.conns).forEach((k) => {
               const c = redisUser.conns[k];
               if (c.presence !== "away") c.base = c.presence;
               c.presence = "away";
-              if (conns && conns[k]) {
-                try { conns[k].send("away"); } catch (e) { /* ignore */ }
-              }
+              framesToSend.push([k, "away"]);
             });
           }
           else if (newPresence === "unaway") {
+            framesToSend = [];
             // Restore each conn's remembered idle/online state. Fall back
             // to 'online' if `base` is missing (legacy entries written
             // before the base field existed).
@@ -430,12 +551,15 @@ const configureWSServer = (wss) => {
               const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
               c.presence = restore;
               c.base = restore;
-              if (conns && conns[k]) {
-                try { conns[k].send("unaway"); } catch (e) { /* ignore */ }
-              }
+              framesToSend.push([k, "unaway"]);
             });
           }
           else {
+            // user.away decides whether to override transient presence; must
+            // be read inside the lock to race-safely interleave with REST
+            // /auth/settings/update-profile (which mutates user.away under
+            // the same per-user lock). Moving this out requires denormalizing
+            // user.away into the redis body — out of scope for this change.
             const user = await User.findOne({ where: { id } });
             const c = redisUser.conns[connId];
             if (c) {
@@ -463,20 +587,37 @@ const configureWSServer = (wss) => {
 
           await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
-          // Sync user's own other sessions (cross-server) for away/unaway
+          // Decide deferred effects while we still have prevFinalPresence.
           if (newPresence === "away" || newPresence === "unaway") {
+            crossServerAwayFrame = true;
+          }
+          if (finalPresence !== prevFinalPresence) {
+            presenceChangedTo = finalPresence;
+          }
+
+          await release();
+
+          // ── Deferred side effects (outside the lock) ──
+          if (framesToSend) {
+            const conns = users.get(id);
+            if (conns) {
+              for (const [k, frame] of framesToSend) {
+                if (conns[k]) {
+                  try { conns[k].send(frame); } catch (e) { /* ignore */ }
+                }
+              }
+            }
+          }
+          if (crossServerAwayFrame) {
+            // Sync user's own other sessions (cross-server) for away/unaway
             publishClient.publish("messages", JSON.stringify({
               serverId,
               msg: { id, type: msg.type, value: msg.value }
             }));
           }
-
-          // Broadcast to relevant users whenever final presence actually changed
-          if (finalPresence !== prevFinalPresence) {
-            broadcastPresenceChange(id, finalPresence);
+          if (presenceChangedTo !== null) {
+            broadcastPresenceChange(id, presenceChangedTo);
           }
-
-          await release();
         }
 
         updateWSMetrics(date1);
@@ -497,7 +638,12 @@ const configureWSServer = (wss) => {
 
       let release = async () => {};
       try {
-        release = await lock(redisClient, `lock:users:${id}`, lockOptions);
+        // presenceChangedTo is captured inside the lock so the lock-protected
+        // hSet/del completes before we incur the broadcastPresenceChange cost
+        // (which queues a debounced fanout_all + cross-server publish).
+        let presenceChangedTo = null;
+
+        release = await lock(`lock:users:${id}`, lockOptions);
         const raw = await presenceClient.hGet(`users:${id}`, "body");
         if (!raw) {
           // Already cleaned up (e.g. by a concurrent close)
@@ -516,7 +662,7 @@ const configureWSServer = (wss) => {
         if (connIds.length <= 1 && redisUser.conns[connId]) {
           await presenceClient.del(`users:${id}`);
           users.delete(id);
-          broadcastPresenceChange(id, 'offline');
+          presenceChangedTo = 'offline';
         }
         else {
           delete redisUser.conns[connId];
@@ -536,11 +682,17 @@ const configureWSServer = (wss) => {
           await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
 
           if (finalPresence !== prevFinalPresence) {
-            broadcastPresenceChange(id, finalPresence);
+            presenceChangedTo = finalPresence;
           }
         }
 
         await release();
+
+        // Deferred broadcast — outside the lock.
+        if (presenceChangedTo !== null) {
+          broadcastPresenceChange(id, presenceChangedTo);
+        }
+
         console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
       }
       catch (err) {
@@ -575,7 +727,7 @@ const configureWSServer = (wss) => {
 
       let initRelease = async () => {};
       try {
-        initRelease = await lock(redisClient, `lock:users:${id}`, lockOptions);
+        initRelease = await lock(`lock:users:${id}`, lockOptions);
         const existingStr = await presenceClient.hGet(`users:${id}`, "body");
         const isFirstConn = !existingStr;
         wasFirstConn = isFirstConn;
@@ -666,7 +818,8 @@ module.exports = {
   broadcastPresenceChange,
   notifyUserAwayFrame,
   getCoCommunityUserIds,
-  initWS,
+  initWSPublisher,
+  initWSSubscriber,
   withUserPresenceLock,
   lockOptions
 };
