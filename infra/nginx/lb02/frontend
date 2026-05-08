@@ -1,0 +1,20 @@
+server {
+    listen 127.0.0.1:8080;
+
+    root /srv/frontend/dist;
+    index index.html;
+
+    # MinIO storage lives on group1-web-lb01 (private IP 10.0.1.28) only.
+    # lb-02 has no MinIO of its own, so proxy uploads/downloads over the
+    # private LAN. If MinIO is ever moved off lb-01 or replicated, update
+    # this upstream.
+    location /minio/ {
+        proxy_pass http://10.0.1.28:9000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
