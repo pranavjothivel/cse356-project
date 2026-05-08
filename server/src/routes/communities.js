@@ -11,6 +11,11 @@ const { invalidateChannelMemberCache, invalidateChannelMember } = require('./mes
 // near-coherent. Replaces a 1-3s SELECT that was starving the main DB pool.
 const UNREAD_CACHE_TTL = 30; // seconds
 
+// Chunk size for ChannelMember bulkCreate during channel create / private→public.
+// 500 keeps each INSERT well under statement_timeout even on a hot DB; for the
+// largest communities (~6.5k members) this is ~13 round-trips inside one tx.
+const CHANNEL_ENROLL_BATCH = 500;
+
 const router = Router();
 
 function requireAuth(req, res, next) {
@@ -350,32 +355,48 @@ router.post('/:communityId/channels', async (req, res, next) => {
       return res.status(409).json({ error: 'Channel exists' });
     }
 
-    const channel = await Channel.create({
-      community_id: req.params.communityId,
-      name: name.trim(),
-      is_private: !!is_private,
-    });
+    // Wrap channel insert + member enrollment in one transaction so a failed
+    // bulkCreate rolls back the channel itself. Previously, an aborted insert
+    // (statement_timeout on a 2.5k-row INSERT in a 6.5k-member community) left
+    // an orphan public channel with near-zero membership; retries hit the
+    // dedupe guard above and 403 on every sendMessage was the visible symptom.
+    // Chunked enrollment keeps each INSERT well under statement_timeout.
+    const channel = await sequelize.transaction(async (t) => {
+      const ch = await Channel.create({
+        community_id: req.params.communityId,
+        name: name.trim(),
+        is_private: !!is_private,
+      }, { transaction: t });
 
-    if (is_private) {
-      // Only add the creator
-      await ChannelMember.create({ channel_id: channel.id, user_id: req.user.id });
-    } else {
-      // Add all community members
-      const members = await CommunityMember.findAll({
-        where: { community_id: req.params.communityId },
-        attributes: ['user_id'],
-      });
-      await ChannelMember.bulkCreate(
-        members.map(m => ({ channel_id: channel.id, user_id: m.user_id })),
-        { 
-          ignoreDuplicates: true,
-          returning: false,
-          validate: false,
-          hooks: false,
-          individualHooks: false
+      if (is_private) {
+        await ChannelMember.create(
+          { channel_id: ch.id, user_id: req.user.id },
+          { transaction: t }
+        );
+      } else {
+        const members = await CommunityMember.findAll({
+          where: { community_id: req.params.communityId },
+          attributes: ['user_id'],
+          transaction: t,
+        });
+        for (let i = 0; i < members.length; i += CHANNEL_ENROLL_BATCH) {
+          await ChannelMember.bulkCreate(
+            members.slice(i, i + CHANNEL_ENROLL_BATCH).map(m => ({
+              channel_id: ch.id, user_id: m.user_id,
+            })),
+            {
+              ignoreDuplicates: true,
+              returning: false,
+              validate: false,
+              hooks: false,
+              individualHooks: false,
+              transaction: t,
+            }
+          );
         }
-      );
-    }
+      }
+      return ch;
+    });
 
     res.status(201).json({ channel: { id: channel.id, name: channel.name, is_private: channel.is_private, community_id: channel.community_id } });
   } catch (err) { next(err); }
