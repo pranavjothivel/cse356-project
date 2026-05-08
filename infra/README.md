@@ -10,13 +10,13 @@ All nodes are Linodes on the CSE356 course cluster.
 | `group1-api-node-02` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.149` | `10.0.1.121` |
 | `group1-api-node-03` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.239` | `10.0.0.177` |
 | `group1-api-node-04` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.223` | `10.0.3.44` |
-| `group1-api-node-04b` | Orphan — 24.04 ultimate-ws spike (not in deploy) | Clanode 16G | `130.245.136.230` | `10.0.2.240` |
+| `group1-api-node-04b` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.230` | `10.0.2.240` |
 | `group1-api-node-05` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.72` | `10.0.3.79` |
-| `group1-api-node-05a` | Orphan — 24.04 ultimate-ws spike (not in deploy) | Clanode 16G | `130.245.136.85` | `10.0.0.7` |
+| `group1-api-node-05a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.85` | `10.0.0.7` |
 | `group1-api-node-06` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.112` | `10.0.3.32` |
-| `group1-api-node-06a` | Orphan — 24.04 ultimate-ws spike (not in deploy) | Clanode 16G | `130.245.136.220` | `10.0.1.133` |
+| `group1-api-node-06a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.220` | `10.0.1.133` |
 | `group1-api-node-07` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.53` | `10.0.2.10` |
-| `group1-api-node-07a` | Orphan — 24.04 ultimate-ws spike (not in deploy) | Clanode 16G | `130.245.136.79` | `10.0.1.4` |
+| `group1-api-node-07a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.79` | `10.0.1.4` |
 | `group1-db-psql-01` | PostgreSQL database | Clanode 16G | `130.245.136.224` | `10.0.1.235` |
 | `group1-db-redis-01` | Redis (sessions, cache, presence) | Clanode 16G | `130.245.136.86` | `10.0.0.136` |
 | `group1-db-redis-02` | Redis (pub/sub for cross-node WS broadcast) | Clanode 32G | `130.245.136.207` | `10.0.0.106` |
@@ -27,7 +27,7 @@ All nodes are Linodes on the CSE356 course cluster.
 
 > App nodes and the LB connect to PostgreSQL and Redis over the **private network** (10.x addresses). Public IPs for DB/cache nodes are for direct SSH access only — never exposed to application traffic.
 >
-> The `*a`/`*b` orphan nodes were provisioned during the 2026-05-06 24.04+ultimate-ws migration spike and remain powered on for potential future use, but are excluded from `infra/nodes.yml` and the HAProxy backends.
+> The `*a`/`*b` nodes were provisioned during the 2026-05-06 24.04+ultimate-ws migration spike and rolled into the WS pool on 2026-05-08. They run Ubuntu 24.04 (the others are 22.04); their HAProxy server entries (`node8`–`node11`) start `disabled` until the first rolling-hot-deploy lands app code and the re-enable step flips them to `ready`.
 
 ## Config Files
 
