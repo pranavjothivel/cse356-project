@@ -54,6 +54,16 @@ function handleSubMessage(raw) {
     // Ignore messages you published
     if (envelope.serverId === serverId) return;
 
+    // ── INSTRUMENTATION (transient, revert as one commit) ──
+    // t_recv = the moment this worker's main thread enters handleSubMessage
+    // for this envelope. publishedAt was stamped by the publisher just
+    // before publishClient.publish(). Difference = end-to-end pubsub
+    // round-trip (publish enqueue → redis-02 main loop → write to
+    // subscriber socket → node-redis client decode → into JS callback).
+    const t_recv = Date.now();
+    const publishedAt = envelope.publishedAt;
+    if (publishedAt) bucketAdd(fanoutLatency.publishToRecv, t_recv - publishedAt);
+
     const msg = envelope.msg;
 
     if (msg.type === "presence") {
@@ -70,6 +80,10 @@ function handleSubMessage(raw) {
           try { conns[k].send("unaway"); } catch (e) { /* ignore broken socket */ }
         });
       }
+      // Single-pass send loop — measure once at the end.
+      const t_send = Date.now();
+      bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+      if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
     }
     else if (msg.type === "fanout") {
       let userIds = msg.userIds;
@@ -82,7 +96,7 @@ function handleSubMessage(raw) {
       // callback, blocking the event loop for N × per-message-time. With
       // chunking, message processing interleaves with everything else.
       setImmediate(() => {
-        deliverLocalChunked(userIds, msg.payload).catch(err => console.error('fanout error:', err));
+        deliverLocalChunked(userIds, msg.payload, t_recv, publishedAt).catch(err => console.error('fanout error:', err));
       });
     }
     else if (msg.type === "fanout_all") {
@@ -91,7 +105,7 @@ function handleSubMessage(raw) {
       // loop to finish.
       const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
       setImmediate(() => {
-        fanoutAllChunked(data, msg.excludeUserId).catch(err => console.error('fanout_all error:', err));
+        fanoutAllChunked(data, msg.excludeUserId, t_recv, publishedAt).catch(err => console.error('fanout_all error:', err));
       });
     }
   }
@@ -252,7 +266,7 @@ function deliverLocal(userIds, payload) {
  * fanout path. Caller is expected to invoke via setImmediate so the first
  * iteration is also off the pub/sub callback's tick.
  */
-async function deliverLocalChunked(userIds, payload) {
+async function deliverLocalChunked(userIds, payload, t_recv, publishedAt) {
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
   let count = 0;
   for (const userId of userIds) {
@@ -265,6 +279,14 @@ async function deliverLocalChunked(userIds, payload) {
       }
     }
   }
+  // Instrumentation: record one measurement per envelope at full-deliver time.
+  // Includes any setImmediate yields, so high values here mean either many
+  // recipients or contention with other event-loop work — both worth knowing.
+  if (typeof t_recv === 'number') {
+    const t_send = Date.now();
+    bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+    if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
+  }
 }
 
 
@@ -275,6 +297,66 @@ function logBroadcastMetrics() {
   console.log(`Message Broadcast Metrics: ${broadcastMetrics.numMessages} broadcasts, ${avg} ms average time to broadcast`);
 }
 setInterval(logBroadcastMetrics, 30000);
+
+// ──────────────────────────────────────────────
+// Fanout latency profiling (transient — revert as one commit)
+// ──────────────────────────────────────────────
+// Per-envelope timing of the cross-node WS broadcast pipeline:
+//   publishToRecv = subscriber's handleSubMessage entry - publisher's Date.now()
+//   recvToSend    = end of local deliver (last ws.send returns) - handleSubMessage entry
+//   publishToSend = end of local deliver - publisher's Date.now()
+// Publisher-side timestamp is added to envelopes as `publishedAt`. Subscribers
+// without a publishedAt field skip publishToRecv/publishToSend.
+//
+// Cost: ~3 Date.now() calls per envelope + bucket inserts (constant). Memory:
+// 3 × 512-sample ring buffer ≈ 12 KB per worker. Log line every 30s on the
+// same interval as the existing broadcast metric.
+//
+// Clocks are synced via chrony (~±1 ms across Linode hosts). Sub-ms-accurate
+// readings will be noisy; ms-granularity readings are reliable. Negative values
+// (clock skew) are rejected so they don't poison min/avg.
+function makeBucket(cap = 512) {
+  return { count: 0, sum: 0, min: Infinity, max: 0, samples: [], cap };
+}
+function bucketAdd(b, v) {
+  // Reject impossible values: negatives (clock skew between publisher and
+  // subscriber) and > 60 s (almost certainly a bug, e.g. accidentally adding
+  // an absolute timestamp instead of a delta).
+  if (typeof v !== 'number' || v < 0 || v > 60000) return;
+  b.count++;
+  b.sum += v;
+  if (v < b.min) b.min = v;
+  if (v > b.max) b.max = v;
+  if (b.samples.length < b.cap) b.samples.push(v);
+  else b.samples[b.count % b.cap] = v;
+}
+function bucketReset(b) {
+  b.count = 0; b.sum = 0; b.min = Infinity; b.max = 0; b.samples.length = 0;
+}
+function bucketPct(b, p) {
+  if (b.samples.length === 0) return 0;
+  const sorted = b.samples.slice().sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
+const fanoutLatency = {
+  publishToRecv: makeBucket(),
+  recvToSend:    makeBucket(),
+  publishToSend: makeBucket(),
+};
+function logFanoutLatency() {
+  for (const name of Object.keys(fanoutLatency)) {
+    const b = fanoutLatency[name];
+    if (b.count === 0) continue;
+    const avg = (b.sum / b.count).toFixed(2);
+    console.log(
+      `fanoutLatency.${name}: n=${b.count} avg=${avg}ms ` +
+      `p50=${bucketPct(b, 0.5)}ms p95=${bucketPct(b, 0.95)}ms ` +
+      `p99=${bucketPct(b, 0.99)}ms max=${b.max}ms`
+    );
+    bucketReset(b);
+  }
+}
+setInterval(logFanoutLatency, 30000);
 
 /**
  * Pack a UUID array into a tightly-binary Buffer (16 bytes each, no dashes).
@@ -354,10 +436,15 @@ async function broadcastToUsers(userIds, payload) {
   // One publish per destination worker. Each envelope only carries the
   // user-ids that actually live on the receiving worker, so the receiver's
   // subscribe-callback work is bounded by its share of the recipient list.
+  // Single publishedAt for the whole broadcast — every per-worker envelope
+  // for this call shares it, so the receiver-side recvToSend / publishToSend
+  // measurements are comparable across destination workers.
+  const publishedAt = Date.now();
   for (const [destServerId, ids] of byServer) {
     const buf = packUUIDs(ids);
     publishClient.publish(`messages:${destServerId}`, JSON.stringify({
       serverId,
+      publishedAt,
       msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload: payloadStr },
     }));
   }
@@ -390,6 +477,7 @@ function notifyUserAwayFrame(userId, value) {
   // go on the cluster-wide `messages:global` channel.
   publishClient.publish('messages:global', JSON.stringify({
     serverId,
+    publishedAt: Date.now(),
     msg: { id: userId, type: 'presence', value },
   }));
 }
@@ -410,6 +498,7 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   // connected users, so it lives on `messages:global`.
   publishClient.publish('messages:global', JSON.stringify({
     serverId,
+    publishedAt: Date.now(),
     msg: { type: 'fanout_all', payload: data, excludeUserId: excludeUserId || null },
   }));
   if (HAS_LOCAL_WS) {
@@ -425,7 +514,7 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
 // several ms — long enough that incoming message-fanout pub/sub callbacks
 // queue behind it. Yielding lets messages interleave during the long fanout.
 const FANOUT_CHUNK = 50;
-async function fanoutAllChunked(data, excludeUserId) {
+async function fanoutAllChunked(data, excludeUserId, t_recv, publishedAt) {
   let count = 0;
   for (const [uid, conns] of users.entries()) {
     if (excludeUserId && uid === excludeUserId) continue;
@@ -435,6 +524,11 @@ async function fanoutAllChunked(data, excludeUserId) {
         await new Promise(setImmediate);
       }
     }
+  }
+  if (typeof t_recv === 'number') {
+    const t_send = Date.now();
+    bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+    if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
   }
 }
 
@@ -686,6 +780,7 @@ const configureWSServer = (wss) => {
             // delivers to any local tabs of this user.
             publishClient.publish('messages:global', JSON.stringify({
               serverId,
+              publishedAt: Date.now(),
               msg: { id, type: msg.type, value: msg.value }
             }));
           }
