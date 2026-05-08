@@ -358,6 +358,52 @@ function logFanoutLatency() {
 }
 setInterval(logFanoutLatency, 30000);
 
+// ──────────────────────────────────────────────
+// Event-loop saturation profiling (transient — same revert as fanoutLatency)
+// ──────────────────────────────────────────────
+// Independent measurement of how busy / blocked the libuv loop is, sampled
+// continuously regardless of whether broadcasts are happening. Two metrics:
+//
+//   eventLoop.lag         — by how much was a scheduled callback late?
+//                           perf_hooks.monitorEventLoopDelay samples lag
+//                           every `resolution` ms; we read p50/p95/p99/max
+//                           every 30 s and reset.
+//
+//   eventLoop.utilization — fraction of wall time the loop was doing work
+//                           (vs sleeping in poll). 0 = idle, 1 = pegged.
+//
+// Reading guide:
+//   high lag + low utilization  →  blocked on I/O wait, GC pause, or sync
+//                                  syscall (rare in node by design)
+//   high lag + high utilization →  CPU saturated (handler work piling up;
+//                                  setImmediate queue draining slower than
+//                                  it fills)
+//   low lag  + high utilization →  busy but keeping up
+//   low lag  + low utilization  →  idle / healthy
+//
+// Cost: monitorEventLoopDelay is a libuv timer at `resolution` ms with
+// nanosecond histogram bookkeeping in C++; designed for production use.
+const { monitorEventLoopDelay, performance } = require('perf_hooks');
+const elDelay = monitorEventLoopDelay({ resolution: 20 });
+elDelay.enable();
+let lastELU = performance.eventLoopUtilization();
+
+function logEventLoop() {
+  const ms = (ns) => (ns / 1e6).toFixed(1);
+  console.log(
+    `eventLoop.lag: mean=${ms(elDelay.mean)}ms ` +
+    `p50=${ms(elDelay.percentile(50))}ms ` +
+    `p95=${ms(elDelay.percentile(95))}ms ` +
+    `p99=${ms(elDelay.percentile(99))}ms ` +
+    `max=${ms(elDelay.max)}ms`
+  );
+  const elu = performance.eventLoopUtilization(lastELU);
+  console.log(`eventLoop.utilization: ${(elu.utilization * 100).toFixed(1)}%`);
+  lastELU = performance.eventLoopUtilization();
+  elDelay.reset();
+}
+setInterval(logEventLoop, 30000);
+
 /**
  * Pack a UUID array into a tightly-binary Buffer (16 bytes each, no dashes).
  * Subscriber-side `bufferToUUIDs` reverses this. Lifted out of the per-worker
