@@ -154,7 +154,14 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    // 'auto' marks the cookie Secure when req.secure is true. With
+    // `app.set('trust proxy', 1)` above that respects HAProxy's
+    // X-Forwarded-Proto header — so HTTPS clients still get a Secure
+    // cookie, but plain-HTTP clients (lb02's :80 frontend) get a
+    // non-Secure cookie they can actually send back. Hard-coding `true`
+    // in production silently drops the Set-Cookie header on any HTTP
+    // request, which presents as "login 200, /me 401" in the browser.
+    secure: 'auto',
     sameSite: 'lax',
     maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
   },
