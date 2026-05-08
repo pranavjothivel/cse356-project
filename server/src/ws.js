@@ -54,15 +54,6 @@ function handleSubMessage(raw) {
     // Ignore messages you published
     if (envelope.serverId === serverId) return;
 
-    // Pass 2 publishers dual-publish to the legacy `messages` channel as a
-    // backward-compat backup for any worker still on pre-pass-1 code during
-    // a rolling deploy. They mark those envelopes with routingMode so
-    // pass-1+ workers (which already received the canonical copy via
-    // `messages:{serverId}` or `messages:global`) skip the duplicate here.
-    // Remove this guard in pass 3 alongside the dual-publish + the legacy
-    // subscription.
-    if (envelope.routingMode === 'per-worker') return;
-
     const msg = envelope.msg;
 
     if (msg.type === "presence") {
@@ -157,17 +148,15 @@ async function initWSPublisher() {
  */
 async function initWSSubscriber() {
   await subClient.connect();
-  // Per-worker channel: pass 2 routes `fanout` (the message-delivery hot
-  // path) here, only to workers that hold at least one of the recipients.
-  // No traffic until pass 2 ships; safe to subscribe in pass 1.
+  // Per-worker channel for the WS message-delivery hot path. broadcastToUsers
+  // looks up which worker(s) hold each recipient (via presenceClient) and
+  // publishes one small envelope per destination worker, so a worker only
+  // receives `fanout` envelopes whose recipient list intersects its local
+  // `users` Map. Per-publish redis-02 work no longer scales with cluster size.
   await subClient.subscribe(`messages:${serverId}`, handleSubMessage);
-  // Cluster-wide channel: pass 2 routes `presence` and `fanout_all` here —
-  // these legitimately need every WS worker to receive them.
+  // Cluster-wide channel for `presence` and `fanout_all` — these legitimately
+  // need every WS worker to receive them.
   await subClient.subscribe('messages:global', handleSubMessage);
-  // Legacy channel: still receives all traffic in pass 1 (no publisher
-  // changes yet) and the dual-published backups in pass 2 (which the
-  // routingMode guard in handleSubMessage drops). Removed in pass 3.
-  await subClient.subscribe('messages', handleSubMessage);
   console.log("Redis subscriber connected");
 }
 
@@ -301,23 +290,18 @@ function packUUIDs(uuids) {
  * server in the cluster. Use this from REST handlers when a write needs to
  * push a real-time update (message.created, conversation.participants_changed, ...).
  *
- * Routing model (pass 2 of 3):
+ * Routing model:
  *   - Local sessions (this worker holds them) → `deliverLocal` synchronously.
  *   - Cross-worker sessions → look up presenceClient.users:{id}.body for every
  *     recipient, group by `c.serverId` (each conn knows which worker holds it,
  *     written in the connect path), then publish ONE small envelope per
  *     destination worker to `messages:{destServerId}`. A worker only receives
  *     `fanout` envelopes containing user-ids it actually has connected.
- *   - Backward compat (removed in pass 3): also dual-publish the full
- *     recipient list to the legacy `messages` channel with
- *     `routingMode: 'per-worker'` set, so any pre-pass-1 worker still in the
- *     cluster during a rolling deploy still receives the broadcast. Pass-1+
- *     workers see the routingMode flag in handleSubMessage and skip the
- *     duplicate.
  *
  * Fire-and-forget against the publish path; callers don't await. The HMGET
  * pipeline adds one redis-01 round-trip (~sub-ms) but the payload going to
- * redis-02 shrinks from O(N_subscribers × len) to O(N_recipients × len).
+ * redis-02 shrinks from O(N_subscribers × len) to O(N_recipients × len), so
+ * adding more WS workers stops amplifying per-publish redis-02 work.
  */
 async function broadcastToUsers(userIds, payload) {
   if (!userIds || userIds.length === 0) return;
@@ -378,17 +362,6 @@ async function broadcastToUsers(userIds, payload) {
     }));
   }
 
-  // Backward-compat dual-publish on the legacy `messages` channel for any
-  // pre-pass-1 worker still in the cluster. Pass-1+ workers skip these via
-  // the routingMode guard in handleSubMessage. Removed in pass 3 once the
-  // whole cluster is on pass-2 code.
-  const legacyBuf = packUUIDs(userIds);
-  publishClient.publish('messages', JSON.stringify({
-    serverId,
-    routingMode: 'per-worker',
-    msg: { type: 'fanout', userIds: [], userIdsBuf: legacyBuf.toString('base64'), payload: payloadStr },
-  }));
-
   broadcastMetrics.numMessages++;
   broadcastMetrics.sumProcessing += Date.now() - date1;
 }
@@ -414,18 +387,9 @@ function notifyUserAwayFrame(userId, value) {
   }
   // Cross-server fanout. presence frames legitimately need every WS worker
   // to receive them (any worker may hold another tab of this user), so they
-  // go on the cluster-wide `messages:global` channel. Dual-publish on the
-  // legacy `messages` channel with routingMode='per-worker' for pre-pass-1
-  // workers; pass-1+ workers skip the duplicate via handleSubMessage.
-  // Remove the dual-publish in pass 3.
-  const env = JSON.stringify({
+  // go on the cluster-wide `messages:global` channel.
+  publishClient.publish('messages:global', JSON.stringify({
     serverId,
-    msg: { id: userId, type: 'presence', value },
-  });
-  publishClient.publish('messages:global', env);
-  publishClient.publish('messages', JSON.stringify({
-    serverId,
-    routingMode: 'per-worker',
     msg: { id: userId, type: 'presence', value },
   }));
 }
@@ -442,19 +406,10 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   // responsive to incoming message fanouts during the local send loop.
   // Carry payload as already-stringified so subscriber-side workers don't
   // re-serialize it; avoids a second JSON.stringify cluster-wide per event.
-  //
   // fanout_all genuinely needs every WS worker to deliver to its locally
-  // connected users, so it lives on `messages:global`. Dual-publish on the
-  // legacy `messages` channel with routingMode='per-worker' for pre-pass-1
-  // workers; pass-1+ workers skip the duplicate via handleSubMessage.
-  // Remove the dual-publish in pass 3.
+  // connected users, so it lives on `messages:global`.
   publishClient.publish('messages:global', JSON.stringify({
     serverId,
-    msg: { type: 'fanout_all', payload: data, excludeUserId: excludeUserId || null },
-  }));
-  publishClient.publish('messages', JSON.stringify({
-    serverId,
-    routingMode: 'per-worker',
     msg: { type: 'fanout_all', payload: data, excludeUserId: excludeUserId || null },
   }));
   if (HAS_LOCAL_WS) {
@@ -727,16 +682,10 @@ const configureWSServer = (wss) => {
           }
           if (crossServerAwayFrame) {
             // Sync user's own other sessions (cross-server) for away/unaway.
-            // presence frames go on `messages:global`; legacy dual-publish
-            // marked routingMode='per-worker' for pre-pass-1 workers (removed
-            // in pass 3).
+            // presence frames go on `messages:global` so every WS worker
+            // delivers to any local tabs of this user.
             publishClient.publish('messages:global', JSON.stringify({
               serverId,
-              msg: { id, type: msg.type, value: msg.value }
-            }));
-            publishClient.publish('messages', JSON.stringify({
-              serverId,
-              routingMode: 'per-worker',
               msg: { id, type: msg.type, value: msg.value }
             }));
           }
