@@ -10,13 +10,13 @@ All nodes are Linodes on the CSE356 course cluster.
 | `group1-api-node-02` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.149` | `10.0.1.121` |
 | `group1-api-node-03` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.239` | `10.0.0.177` |
 | `group1-api-node-04` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.223` | `10.0.3.44` |
-| `group1-api-node-04b` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.230` | `10.0.2.240` |
+| `group1-api-node-04b` | Parked — WS pool ext stopped 2026-05-08 (redis-02 fanout) | Clanode 16G | `130.245.136.230` | `10.0.2.240` |
 | `group1-api-node-05` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.72` | `10.0.3.79` |
-| `group1-api-node-05a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.85` | `10.0.0.7` |
+| `group1-api-node-05a` | Parked — WS pool ext stopped 2026-05-08 (redis-02 fanout) | Clanode 16G | `130.245.136.85` | `10.0.0.7` |
 | `group1-api-node-06` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.112` | `10.0.3.32` |
-| `group1-api-node-06a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.220` | `10.0.1.133` |
+| `group1-api-node-06a` | Parked — WS pool ext stopped 2026-05-08 (redis-02 fanout) | Clanode 16G | `130.245.136.220` | `10.0.1.133` |
 | `group1-api-node-07` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.53` | `10.0.2.10` |
-| `group1-api-node-07a` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.79` | `10.0.1.4` |
+| `group1-api-node-07a` | Parked — WS pool ext stopped 2026-05-08 (redis-02 fanout) | Clanode 16G | `130.245.136.79` | `10.0.1.4` |
 | `group1-db-psql-01` | PostgreSQL database | Clanode 16G | `130.245.136.224` | `10.0.1.235` |
 | `group1-db-redis-01` | Redis (sessions, cache, presence) | Clanode 16G | `130.245.136.86` | `10.0.0.136` |
 | `group1-db-redis-02` | Redis (pub/sub for cross-node WS broadcast) | Clanode 32G | `130.245.136.207` | `10.0.0.106` |
