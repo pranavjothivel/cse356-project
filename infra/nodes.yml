@@ -18,29 +18,33 @@ app_nodes:
     type: 8vcpu-16gb
     # Resized 2026-05-05 from 2vcpu-4gb. All 3 API nodes are now uniform.
     api_only: true
-  # 4-node WS pool (04/05/06/07). HAProxy app_ws_servers backend routes
-  # WS upgrades here; deploy pipeline injects WORKER_ROLE=ws so app.js
-  # skips /api mounts on these nodes.
-  - name: group1-api-node-04
-    ip: 130.245.136.223
-    private_ip: 10.0.3.44
-    type: 8vcpu-16gb
-    ws_only: true
-  - name: group1-api-node-05
-    ip: 130.245.136.72
-    private_ip: 10.0.3.79
-    type: 8vcpu-16gb
-    ws_only: true
-  - name: group1-api-node-06
-    ip: 130.245.136.112
-    private_ip: 10.0.3.32
-    type: 8vcpu-16gb
-    ws_only: true
-  - name: group1-api-node-07
-    ip: 130.245.136.53
-    private_ip: 10.0.2.10
-    type: 8vcpu-16gb
-    ws_only: true
+  # Original 4-node WS pool (04/05/06/07) — REMOVED from rotation 2026-05-08
+  # during the uWebSockets.js rewrite. These nodes run Ubuntu 22.04 (glibc
+  # 2.35) and the uws prebuilt binary is built against newer glibc; they
+  # can't load the rewritten WS layer. Commented out (not deleted) per
+  # comment-don't-delete convention so the IPs are recoverable if we resize
+  # them or rebuild on 24.04. The replacement uws pool is the lettered set
+  # (04b/05a/06a/07a) below.
+  # - name: group1-api-node-04
+  #   ip: 130.245.136.223
+  #   private_ip: 10.0.3.44
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-05
+  #   ip: 130.245.136.72
+  #   private_ip: 10.0.3.79
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-06
+  #   ip: 130.245.136.112
+  #   private_ip: 10.0.3.32
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-07
+  #   ip: 130.245.136.53
+  #   private_ip: 10.0.2.10
+  #   type: 8vcpu-16gb
+  #   ws_only: true
   # WS pool extension added 2026-05-08. Originally provisioned during the
   # 2026-05-06 24.04 ultimate-ws spike and parked as orphans; bringing them
   # in to double WS capacity (4 → 8 nodes). Ubuntu 24.04 (the others are
