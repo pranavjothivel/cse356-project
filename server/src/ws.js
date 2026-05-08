@@ -54,6 +54,15 @@ function handleSubMessage(raw) {
     // Ignore messages you published
     if (envelope.serverId === serverId) return;
 
+    // Pass 2 publishers dual-publish to the legacy `messages` channel as a
+    // backward-compat backup for any worker still on pre-pass-1 code during
+    // a rolling deploy. They mark those envelopes with routingMode so
+    // pass-1+ workers (which already received the canonical copy via
+    // `messages:{serverId}` or `messages:global`) skip the duplicate here.
+    // Remove this guard in pass 3 alongside the dual-publish + the legacy
+    // subscription.
+    if (envelope.routingMode === 'per-worker') return;
+
     const msg = envelope.msg;
 
     if (msg.type === "presence") {
@@ -148,6 +157,16 @@ async function initWSPublisher() {
  */
 async function initWSSubscriber() {
   await subClient.connect();
+  // Per-worker channel: pass 2 routes `fanout` (the message-delivery hot
+  // path) here, only to workers that hold at least one of the recipients.
+  // No traffic until pass 2 ships; safe to subscribe in pass 1.
+  await subClient.subscribe(`messages:${serverId}`, handleSubMessage);
+  // Cluster-wide channel: pass 2 routes `presence` and `fanout_all` here —
+  // these legitimately need every WS worker to receive them.
+  await subClient.subscribe('messages:global', handleSubMessage);
+  // Legacy channel: still receives all traffic in pass 1 (no publisher
+  // changes yet) and the dual-published backups in pass 2 (which the
+  // routingMode guard in handleSubMessage drops). Removed in pass 3.
   await subClient.subscribe('messages', handleSubMessage);
   console.log("Redis subscriber connected");
 }
@@ -743,7 +762,13 @@ const configureWSServer = (wss) => {
         // still computes finalPresence from all existing conns (which will
         // still have presence='away'), so the new conn's 'online' is
         // overridden by the away priority and finalPresence stays 'away'.
-        const newConn = { presence: "online", base: "online" };
+        //
+        // serverId records which worker process holds this WebSocket so pass-2
+        // `broadcastToUsers` can route the cross-node fanout to the specific
+        // worker(s) that have the recipient connected, instead of broadcasting
+        // to every WS worker. Multi-tab on different workers naturally produces
+        // distinct serverId entries across this user's `conns`.
+        const newConn = { presence: "online", base: "online", serverId };
 
         let user;
         if (existingStr) {
