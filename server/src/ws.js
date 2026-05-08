@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const uWS = require('uWebSockets.js');
 
 /* lock is used as a mutex that works even between nodes
    lock releases after 200ms in case locker failed to release, poll every 5ms
@@ -492,328 +493,445 @@ function logWSMetrics() {
 setInterval(logWSMetrics, 30000);
 
 
-const configureWSServer = (wss) => {
-  wss.on('connection', async (ws, req) => {
-    let connId = crypto.randomUUID();
-    let id;
+// uWebSockets.js-based WS layer. Wire contract is unchanged from the prior
+// `ws` library implementation (see plan 2026-05-08): plain text frames
+// "ready"/"away"/"unaway"/"error", JSON-stringified events for everything
+// else, single inbound `{type:'presence', value:...}` frame from clients.
+//
+// uWS owns its listener — it cannot share a port with Node's http module.
+// On WS-role workers we run uws on WS_PORT (default 3001) alongside
+// Express on PORT (3000). HAProxy app_ws_servers backend points lettered
+// nodes (04b/05a/06a/07a) at :3001; original 04/05/06/07 stay on :3000
+// running the legacy ws-library build until cutover.
 
-    ws.on('message', async (data) => {
-      let date1 = Date.now();
+// Per-connection async handlers borrow the same defensive structure as the
+// previous implementation: parse the inbound frame synchronously at the top
+// (uws message buffers are only valid during the handler tick), then run
+// the lock → hGet → mutate → hSet → release critical section, then deferred
+// side effects after release.
 
-      let release = async () => {};
-      try {
-        const msg = JSON.parse(data);
+async function handlePresenceMessage(ws, data) {
+  const ud = ws.getUserData();
+  const id = ud.userId;
+  const connId = ud.connId;
+  if (!id) return; // upgrade userData missing — shouldn't happen
+  let date1 = Date.now();
 
-        if (msg.type === 'presence') {
-          const newPresence = msg.value;
+  let release = async () => {};
+  try {
+    const msg = JSON.parse(data);
 
-          if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
+    if (msg.type === 'presence') {
+      const newPresence = msg.value;
 
-          // Effects collected inside the lock and applied AFTER release so the
-          // critical section is just hGet → mutate → hSet. Lock-wait p99 was
-          // ~146 ms with ws.send loops, publish, and broadcastPresenceChange
-          // all running while the lock was held; deferring them shrinks the
-          // window to a single Redis read-modify-write.
-          let framesToSend = null;       // [connId, "away"|"unaway"]
-          let crossServerAwayFrame = false;
-          let presenceChangedTo = null;  // string when finalPresence !== prev
+      if (!(newPresence === "online" || newPresence === "idle" || newPresence === "away" || newPresence === "unaway")) return;
 
-          release = await lock(`lock:users:${id}`, lockOptions);
-          const raw = await presenceClient.hGet(`users:${id}`, "body");
-          if (!raw) {
-            await release();
-            updateWSMetrics(date1);
-            return; // connection closed between reads
-          }
-          const redisUser = JSON.parse(raw);
-          const prevFinalPresence = redisUser.presence;
+      // Effects collected inside the lock and applied AFTER release so the
+      // critical section is just hGet → mutate → hSet. Lock-wait p99 was
+      // ~146 ms with ws.send loops, publish, and broadcastPresenceChange
+      // all running while the lock was held; deferring them shrinks the
+      // window to a single Redis read-modify-write.
+      let framesToSend = null;       // [connId, "away"|"unaway"]
+      let crossServerAwayFrame = false;
+      let presenceChangedTo = null;  // string when finalPresence !== prev
 
-          if (newPresence === "away") {
-            framesToSend = [];
-            // Set each of the user's connections to away.
-            // Remember each conn's pre-away idle/online state in `base`
-            // so unaway can restore it instead of slamming every conn to
-            // 'online'. The actual ws.send happens after release().
-            Object.keys(redisUser.conns).forEach((k) => {
-              const c = redisUser.conns[k];
-              if (c.presence !== "away") c.base = c.presence;
-              c.presence = "away";
-              framesToSend.push([k, "away"]);
-            });
-          }
-          else if (newPresence === "unaway") {
-            framesToSend = [];
-            // Restore each conn's remembered idle/online state. Fall back
-            // to 'online' if `base` is missing (legacy entries written
-            // before the base field existed).
-            Object.keys(redisUser.conns).forEach((k) => {
-              const c = redisUser.conns[k];
-              const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
-              c.presence = restore;
-              c.base = restore;
-              framesToSend.push([k, "unaway"]);
-            });
-          }
-          else {
-            // user.away decides whether to override transient presence; must
-            // be read inside the lock to race-safely interleave with REST
-            // /auth/settings/update-profile (which mutates user.away under
-            // the same per-user lock). Moving this out requires denormalizing
-            // user.away into the redis body — out of scope for this change.
-            const user = await User.findOne({ where: { id } });
-            const c = redisUser.conns[connId];
-            if (c) {
-              if (!user || !user.away) {
-                // Not away: the conn's effective presence tracks activity.
-                c.presence = newPresence;
-                c.base = newPresence;
-              } else {
-                // Away: keep `presence:'away'` as the override, but update
-                // `base` so a later unaway restores the conn to the current
-                // idle/online state rather than the state at away-time.
-                c.base = newPresence;
-              }
-            }
-          }
-
-          // Determine final display presence: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
-          }
-          redisUser.presence = finalPresence;
-
-          await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-
-          // Decide deferred effects while we still have prevFinalPresence.
-          if (newPresence === "away" || newPresence === "unaway") {
-            crossServerAwayFrame = true;
-          }
-          if (finalPresence !== prevFinalPresence) {
-            presenceChangedTo = finalPresence;
-          }
-
-          await release();
-
-          // ── Deferred side effects (outside the lock) ──
-          if (framesToSend) {
-            const conns = users.get(id);
-            if (conns) {
-              for (const [k, frame] of framesToSend) {
-                if (conns[k]) {
-                  try { conns[k].send(frame); } catch (e) { /* ignore */ }
-                }
-              }
-            }
-          }
-          if (crossServerAwayFrame) {
-            // Sync user's own other sessions (cross-server) for away/unaway
-            publishClient.publish("messages", JSON.stringify({
-              serverId,
-              msg: { id, type: msg.type, value: msg.value }
-            }));
-          }
-          if (presenceChangedTo !== null) {
-            broadcastPresenceChange(id, presenceChangedTo);
-          }
-        }
-
-        updateWSMetrics(date1);
-      }
-      catch (err) {
-        console.log(err);
-        try { await release() } catch (e) { console.log(e); }
-        try { ws.send('error'); } catch (e) { /* ignore */ }
-        ws.close();
-        updateWSMetrics(date1);
-      }
-    });
-
-    // ws.on('pong') removed — see PR #128
-
-    ws.on('close', async () => {
-      if (!id) return; // init failed, nothing to clean up
-
-      let release = async () => {};
-      try {
-        // presenceChangedTo is captured inside the lock so the lock-protected
-        // hSet/del completes before we incur the broadcastPresenceChange cost
-        // (which queues a debounced fanout_all + cross-server publish).
-        let presenceChangedTo = null;
-
-        release = await lock(`lock:users:${id}`, lockOptions);
-        const raw = await presenceClient.hGet(`users:${id}`, "body");
-        if (!raw) {
-          // Already cleaned up (e.g. by a concurrent close)
-          connections.delete(connId);
-          await release();
-          return;
-        }
-        const redisUser = JSON.parse(raw);
-        const connIds = Object.keys(redisUser.conns);
-
-        connections.delete(connId);
-
-        // "Last connection" is determined by whether this close removes the
-        // only remaining conn — check against the conn set that actually
-        // contains our connId to avoid racing with a concurrent init.
-        if (connIds.length <= 1 && redisUser.conns[connId]) {
-          await presenceClient.del(`users:${id}`);
-          users.delete(id);
-          presenceChangedTo = 'offline';
-        }
-        else {
-          delete redisUser.conns[connId];
-          const localConns = users.get(id);
-          if (localConns) delete localConns[connId];
-
-          // Recalculate presence with remaining connections: away > online > idle
-          let finalPresence = "idle";
-          for (const cid of Object.keys(redisUser.conns)) {
-            const p = redisUser.conns[cid].presence;
-            if (p === "away") { finalPresence = "away"; break; }
-            if (p === "online") finalPresence = "online";
-          }
-
-          const prevFinalPresence = redisUser.presence;
-          redisUser.presence = finalPresence;
-          await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
-
-          if (finalPresence !== prevFinalPresence) {
-            presenceChangedTo = finalPresence;
-          }
-        }
-
+      release = await lock(`lock:users:${id}`, lockOptions);
+      const raw = await presenceClient.hGet(`users:${id}`, "body");
+      if (!raw) {
         await release();
-
-        // Deferred broadcast — outside the lock.
-        if (presenceChangedTo !== null) {
-          broadcastPresenceChange(id, presenceChangedTo);
-        }
-
-        console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
+        updateWSMetrics(date1);
+        return; // connection closed between reads
       }
-      catch (err) {
-        try { await release() } catch (e) { console.log(e); }
-        console.log(err);
+      const redisUser = JSON.parse(raw);
+      const prevFinalPresence = redisUser.presence;
+
+      if (newPresence === "away") {
+        framesToSend = [];
+        // Set each of the user's connections to away.
+        // Remember each conn's pre-away idle/online state in `base`
+        // so unaway can restore it instead of slamming every conn to
+        // 'online'. The actual ws.send happens after release().
+        Object.keys(redisUser.conns).forEach((k) => {
+          const c = redisUser.conns[k];
+          if (c.presence !== "away") c.base = c.presence;
+          c.presence = "away";
+          framesToSend.push([k, "away"]);
+        });
       }
-    });
-
-
-    // Initialization
-    let didResetAway = false;
-    let wasFirstConn = false;
-    try {
-      // Client GETS /auth/generate-ws-token, then attaches the token to this request
-      const url = new URL(req.url, process.env.BASE_URL);
-      const token = url.searchParams.get('token');
-      id = jwt.verify(token, process.env.JWT_SECRET).id;
-
-      const dbUser = await User.findByPk(id);
-
-      // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
-      // says "disconnect/reconnect doesn't count as activity", which we read
-      // as: a reconnect is a fresh session, not a continuation. We only
-      // reset on a user's FIRST live connection (redis hash empty) — opening
-      // a second tab while already connected leaves away alone, so users can
-      // still set away and have it persist across tabs within a session.
-      //
-      // The reset happens BEFORE we create the new conn in Redis, and we
-      // push an "unaway" frame on this socket before "ready" so the client's
-      // auth state flips before HomeScreen's ready-handler reads
-      // auth.user.away and sends the initial presence frame.
-
-      let initRelease = async () => {};
-      try {
-        initRelease = await lock(`lock:users:${id}`, lockOptions);
-        const existingStr = await presenceClient.hGet(`users:${id}`, "body");
-        const isFirstConn = !existingStr;
-        wasFirstConn = isFirstConn;
-
-        if (isFirstConn && dbUser && dbUser.away) {
-          dbUser.away = false;
-          await dbUser.save();
-          didResetAway = true;
-        }
-
-        // Every fresh conn starts as online with base=online. Multi-tab case
-        // where the user is already away: existingStr is present, this block
-        // still computes finalPresence from all existing conns (which will
-        // still have presence='away'), so the new conn's 'online' is
-        // overridden by the away priority and finalPresence stays 'away'.
-        const newConn = { presence: "online", base: "online" };
-
-        let user;
-        if (existingStr) {
-          user = JSON.parse(existingStr);
-          user.conns[connId] = newConn;
-        }
-        else {
-          user = { presence: "online", conns: { [connId]: newConn } };
-        }
-
-        // Recompute final presence honoring away > online > idle across all conns
-        let finalPresence = "idle";
-        for (const cid of Object.keys(user.conns)) {
-          const p = user.conns[cid].presence;
-          if (p === "away") { finalPresence = "away"; break; }
-          if (p === "online") finalPresence = "online";
-        }
-        user.presence = finalPresence;
-
-        await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(user));
-
-        let conns = users.get(id);
-        if (!conns) {
-          conns = { [connId]: ws };
-          users.set(id, conns);
-        }
-        else conns[connId] = ws;
-        connections.set(connId, { userId: id, ws });
-
-        // conns: SET removed — part of ping/pong, see PR #128
-
-        await initRelease();
+      else if (newPresence === "unaway") {
+        framesToSend = [];
+        // Restore each conn's remembered idle/online state. Fall back
+        // to 'online' if `base` is missing (legacy entries written
+        // before the base field existed).
+        Object.keys(redisUser.conns).forEach((k) => {
+          const c = redisUser.conns[k];
+          const restore = (c.base === "idle" || c.base === "online") ? c.base : "online";
+          c.presence = restore;
+          c.base = restore;
+          framesToSend.push([k, "unaway"]);
+        });
       }
-      catch (err) {
-        try { await initRelease() } catch (e) { console.log(e); }
+      else {
+        // user.away decides whether to override transient presence; must
+        // be read inside the lock to race-safely interleave with REST
+        // /auth/settings/update-profile (which mutates user.away under
+        // the same per-user lock). Moving this out requires denormalizing
+        // user.away into the redis body — out of scope for this change.
+        const user = await User.findOne({ where: { id } });
+        const c = redisUser.conns[connId];
+        if (c) {
+          if (!user || !user.away) {
+            // Not away: the conn's effective presence tracks activity.
+            c.presence = newPresence;
+            c.base = newPresence;
+          } else {
+            // Away: keep `presence:'away'` as the override, but update
+            // `base` so a later unaway restores the conn to the current
+            // idle/online state rather than the state at away-time.
+            c.base = newPresence;
+          }
+        }
       }
 
-      // Order matters: push the "unaway" in-band frame BEFORE "ready" so the
-      // client's ready-handler (HomeScreen.tsx) reads the corrected
-      // auth.user.away when it decides which initial presence frame to send.
-      // WS messages are delivered in order to the peer.
-      if (didResetAway) {
-        try { ws.send("unaway"); } catch (e) { /* ignore */ }
+      // Determine final display presence: away > online > idle
+      let finalPresence = "idle";
+      for (const cid of Object.keys(redisUser.conns)) {
+        const p = redisUser.conns[cid].presence;
+        if (p === "away") { finalPresence = "away"; break; }
+        if (p === "online") finalPresence = "online";
+      }
+      redisUser.presence = finalPresence;
+
+      await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+
+      // Decide deferred effects while we still have prevFinalPresence.
+      if (newPresence === "away" || newPresence === "unaway") {
+        crossServerAwayFrame = true;
+      }
+      if (finalPresence !== prevFinalPresence) {
+        presenceChangedTo = finalPresence;
       }
 
-      ws.send("ready");
+      await release();
 
-      // On first connection (previously offline), tell every other connected
-      // user that this user is now online. This fills a gap where observers
-      // saw presence.changed:'offline' when the last conn closed but never
-      // saw the offline → online transition on reconnect until the user's
-      // first activity message. The previously-away-but-reset case also goes
-      // through this branch. Self-excluded: this user's own tabs either
-      // already know (multi-tab) or get the "unaway" frame above.
-      if (wasFirstConn) {
-        broadcastPresenceChange(id, 'online');
+      // ── Deferred side effects (outside the lock) ──
+      if (framesToSend) {
+        const conns = users.get(id);
+        if (conns) {
+          for (const [k, frame] of framesToSend) {
+            if (conns[k]) {
+              try { conns[k].send(frame); } catch (e) { /* ignore */ }
+            }
+          }
+        }
       }
-
-      console.log(`${id} connected on connId ${connId} at ${(new Date()).toString()}`);
+      if (crossServerAwayFrame) {
+        // Sync user's own other sessions (cross-server) for away/unaway
+        publishClient.publish("messages", JSON.stringify({
+          serverId,
+          msg: { id, type: msg.type, value: msg.value }
+        }));
+      }
+      if (presenceChangedTo !== null) {
+        broadcastPresenceChange(id, presenceChangedTo);
+      }
     }
-    catch (err) {
-      console.log(err);
-      ws.close();
+
+    updateWSMetrics(date1);
+  }
+  catch (err) {
+    console.log(err);
+    try { await release() } catch (e) { console.log(e); }
+    try { ws.send('error'); } catch (e) { /* ignore */ }
+    try { ws.close(); } catch (e) { /* ignore */ }
+    updateWSMetrics(date1);
+  }
+}
+
+async function handleClose(ws) {
+  const ud = ws.getUserData();
+  const id = ud.userId;
+  const connId = ud.connId;
+  if (!id) return; // upgrade userData missing or open never completed init
+
+  let release = async () => {};
+  try {
+    // presenceChangedTo is captured inside the lock so the lock-protected
+    // hSet/del completes before we incur the broadcastPresenceChange cost
+    // (which queues a debounced fanout_all + cross-server publish).
+    let presenceChangedTo = null;
+
+    release = await lock(`lock:users:${id}`, lockOptions);
+    const raw = await presenceClient.hGet(`users:${id}`, "body");
+    if (!raw) {
+      // Already cleaned up (e.g. by a concurrent close)
+      connections.delete(connId);
+      await release();
       return;
     }
+    const redisUser = JSON.parse(raw);
+    const connIds = Object.keys(redisUser.conns);
+
+    connections.delete(connId);
+
+    // "Last connection" is determined by whether this close removes the
+    // only remaining conn — check against the conn set that actually
+    // contains our connId to avoid racing with a concurrent init.
+    if (connIds.length <= 1 && redisUser.conns[connId]) {
+      await presenceClient.del(`users:${id}`);
+      users.delete(id);
+      presenceChangedTo = 'offline';
+    }
+    else {
+      delete redisUser.conns[connId];
+      const localConns = users.get(id);
+      if (localConns) delete localConns[connId];
+
+      // Recalculate presence with remaining connections: away > online > idle
+      let finalPresence = "idle";
+      for (const cid of Object.keys(redisUser.conns)) {
+        const p = redisUser.conns[cid].presence;
+        if (p === "away") { finalPresence = "away"; break; }
+        if (p === "online") finalPresence = "online";
+      }
+
+      const prevFinalPresence = redisUser.presence;
+      redisUser.presence = finalPresence;
+      await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(redisUser));
+
+      if (finalPresence !== prevFinalPresence) {
+        presenceChangedTo = finalPresence;
+      }
+    }
+
+    await release();
+
+    // Deferred broadcast — outside the lock.
+    if (presenceChangedTo !== null) {
+      broadcastPresenceChange(id, presenceChangedTo);
+    }
+
+    console.log(`${id} disconnected on connId ${connId} at ${(new Date()).toString()}`);
+  }
+  catch (err) {
+    try { await release() } catch (e) { console.log(e); }
+    console.log(err);
+  }
+}
+
+async function handleOpen(ws) {
+  const ud = ws.getUserData();
+  const id = ud.userId;
+  const connId = ud.connId;
+  // id is set by the upgrade handler from a verified JWT — if it's missing
+  // here, the upgrade contract was violated. Close defensively.
+  if (!id) {
+    try { ws.close(); } catch (e) { /* ignore */ }
+    return;
+  }
+
+  let didResetAway = false;
+  let wasFirstConn = false;
+  try {
+    const dbUser = await User.findByPk(id);
+
+    // Per reviewer rule: reconnecting from offline clears `away`. Spec §2
+    // says "disconnect/reconnect doesn't count as activity", which we read
+    // as: a reconnect is a fresh session, not a continuation. We only
+    // reset on a user's FIRST live connection (redis hash empty) — opening
+    // a second tab while already connected leaves away alone, so users can
+    // still set away and have it persist across tabs within a session.
+    //
+    // The reset happens BEFORE we create the new conn in Redis, and we
+    // push an "unaway" frame on this socket before "ready" so the client's
+    // auth state flips before HomeScreen's ready-handler reads
+    // auth.user.away and sends the initial presence frame.
+
+    let initRelease = async () => {};
+    try {
+      initRelease = await lock(`lock:users:${id}`, lockOptions);
+      const existingStr = await presenceClient.hGet(`users:${id}`, "body");
+      const isFirstConn = !existingStr;
+      wasFirstConn = isFirstConn;
+
+      if (isFirstConn && dbUser && dbUser.away) {
+        dbUser.away = false;
+        await dbUser.save();
+        didResetAway = true;
+      }
+
+      // Every fresh conn starts as online with base=online. Multi-tab case
+      // where the user is already away: existingStr is present, this block
+      // still computes finalPresence from all existing conns (which will
+      // still have presence='away'), so the new conn's 'online' is
+      // overridden by the away priority and finalPresence stays 'away'.
+      const newConn = { presence: "online", base: "online" };
+
+      let user;
+      if (existingStr) {
+        user = JSON.parse(existingStr);
+        user.conns[connId] = newConn;
+      }
+      else {
+        user = { presence: "online", conns: { [connId]: newConn } };
+      }
+
+      // Recompute final presence honoring away > online > idle across all conns
+      let finalPresence = "idle";
+      for (const cid of Object.keys(user.conns)) {
+        const p = user.conns[cid].presence;
+        if (p === "away") { finalPresence = "away"; break; }
+        if (p === "online") finalPresence = "online";
+      }
+      user.presence = finalPresence;
+
+      await presenceClient.hSet(`users:${id}`, "body", JSON.stringify(user));
+
+      let conns = users.get(id);
+      if (!conns) {
+        conns = { [connId]: ws };
+        users.set(id, conns);
+      }
+      else conns[connId] = ws;
+      connections.set(connId, { userId: id, ws });
+
+      // conns: SET removed — part of ping/pong, see PR #128
+
+      await initRelease();
+    }
+    catch (err) {
+      try { await initRelease() } catch (e) { console.log(e); }
+    }
+
+    // Order matters: push the "unaway" in-band frame BEFORE "ready" so the
+    // client's ready-handler (HomeScreen.tsx) reads the corrected
+    // auth.user.away when it decides which initial presence frame to send.
+    // WS messages are delivered in order to the peer.
+    if (didResetAway) {
+      try { ws.send("unaway"); } catch (e) { /* ignore */ }
+    }
+
+    try { ws.send("ready"); } catch (e) { /* ignore */ }
+
+    // On first connection (previously offline), tell every other connected
+    // user that this user is now online. This fills a gap where observers
+    // saw presence.changed:'offline' when the last conn closed but never
+    // saw the offline → online transition on reconnect until the user's
+    // first activity message. The previously-away-but-reset case also goes
+    // through this branch. Self-excluded: this user's own tabs either
+    // already know (multi-tab) or get the "unaway" frame above.
+    if (wasFirstConn) {
+      broadcastPresenceChange(id, 'online');
+    }
+
+    console.log(`${id} connected on connId ${connId} at ${(new Date()).toString()}`);
+  }
+  catch (err) {
+    console.log(err);
+    try { ws.close(); } catch (e) { /* ignore */ }
+  }
+}
+
+let listenSocket = null;
+
+/**
+ * Start the uWebSockets.js WS server on `port`. Replaces the previous
+ * `ws` library + `WebSocket.Server({ server })` wiring. The HTTP express
+ * server keeps running on its own port (PORT) for /api and /health;
+ * uws owns this dedicated WS port.
+ *
+ * Resolves once the listen socket is bound. Rejects if the port is in
+ * use, so app.js startup fails fast instead of silently binding nothing.
+ */
+function startUwsServer(port) {
+  return new Promise((resolve, reject) => {
+    const app = uWS.App();
+
+    app.ws('/*', {
+      // No compression — see plan; matches the prior default.
+      compression: uWS.DISABLED,
+      // Allow generous frames for inbound presence pings; outbound frames
+      // can be much larger (fanout_all payloads). idleTimeout=0 disables
+      // uws's built-in idle close; we deliberately have no app-level
+      // ping/pong (see comment near `Ping/pong disabled`), so leaving the
+      // socket open until TCP closes matches the prior behavior.
+      idleTimeout: 0,
+      maxPayloadLength: 64 * 1024,
+      maxBackpressure: 64 * 1024 * 1024,
+
+      upgrade: (res, req, context) => {
+        // Capture upgrade-handshake headers BEFORE any await — these refs
+        // are invalidated as soon as the handler returns.
+        const secWsKey = req.getHeader('sec-websocket-key');
+        const secWsProtocol = req.getHeader('sec-websocket-protocol');
+        const secWsExtensions = req.getHeader('sec-websocket-extensions');
+        const token = req.getQuery('token');
+
+        let userId;
+        try {
+          userId = jwt.verify(token, process.env.JWT_SECRET).id;
+        }
+        catch (e) {
+          // Reject the upgrade — client sees a 401 instead of an accepted
+          // socket that's immediately closed.
+          res.writeStatus('401 Unauthorized').end();
+          return;
+        }
+
+        const connId = crypto.randomUUID();
+
+        res.upgrade(
+          { userId, connId },
+          secWsKey, secWsProtocol, secWsExtensions,
+          context
+        );
+      },
+
+      open: (ws) => {
+        // Fire-and-forget — uws does not await the promise. handleOpen
+        // catches its own errors and closes the socket on failure.
+        handleOpen(ws);
+      },
+
+      message: (ws, message, isBinary) => {
+        if (isBinary) return; // wire contract is text-only
+        // The ArrayBuffer is only valid during this handler tick; copy
+        // to a string up front so the async handler can use it freely.
+        const data = Buffer.from(message).toString('utf8');
+        handlePresenceMessage(ws, data);
+      },
+
+      close: (ws, code, message) => {
+        // ws is invalidated as soon as this returns; our cleanup only
+        // touches the userData (already attached to ws), the users/
+        // connections Maps, and Redis — so we can hand off to async
+        // safely. handleClose does NOT call ws.send.
+        handleClose(ws);
+      },
+    });
+
+    app.listen(port, (token) => {
+      if (!token) {
+        reject(new Error(`uWS failed to bind on port ${port}`));
+        return;
+      }
+      listenSocket = token;
+      console.log(`uWS WebSocket server listening on port ${port}`);
+      resolve();
+    });
   });
 }
 
+function stopUwsServer() {
+  if (listenSocket) {
+    uWS.us_listen_socket_close(listenSocket);
+    listenSocket = null;
+  }
+}
+
 module.exports = {
-  configureWSServer,
+  startUwsServer,
+  stopUwsServer,
   broadcastToUsers,
   broadcastPresenceChange,
   notifyUserAwayFrame,

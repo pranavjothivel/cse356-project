@@ -15,7 +15,6 @@ const http = require('http');
 // 'finish' listener per response — bump the prototype limit to silence the
 // MaxListenersExceededWarning (not a memory leak, just multiple legitimate listeners).
 // http.ServerResponse.prototype.setMaxListeners(25);
-const WebSocket = require('ws');
 
 const { sequelize, searchSequelize } = require('./db');
 require('./models'); // register all models + associations
@@ -29,7 +28,7 @@ const uploadRouter = require('./routes/upload');
 const searchRouter = require('./routes/search');
 const messagesRouter = require('./routes/messages');
 const { redisClient } = require('./redis');
-const { configureWSServer, initWSPublisher, initWSSubscriber } = require('./ws');
+const { startUwsServer, initWSPublisher, initWSSubscriber } = require('./ws');
 
 const app = express();
 
@@ -281,14 +280,19 @@ async function start() {
 
   const port = process.env.PORT || 3000;
 
-  // Run Express on the HTTP server unconditionally (needed for HAProxy
-  // health checks regardless of role). Attach the WebSocket server only
-  // when this worker handles WS traffic.
-  const server = http.createServer(app);
+  // Bind uWebSockets.js BEFORE Express so HAProxy's `check port 3000`
+  // (Express) doubles as a readiness probe for uws on :3001. If we listened
+  // on :3000 first, there'd be a small window where the LB sees the node
+  // healthy and routes WS upgrades to :3001 before uws is bound, dropping
+  // every connect attempt during startup.
   if (WORKER_ROLE !== 'http') {
-    const wss = new WebSocket.Server({ server });
-    configureWSServer(wss);
+    const wsPort = parseInt(process.env.WS_PORT, 10) || 3001;
+    await startUwsServer(wsPort);
   }
+
+  // Express HTTP server runs on PORT regardless of role — needed for HAProxy
+  // health checks on every node, plus /api/* on api-and-all-role nodes.
+  const server = http.createServer(app);
   server.listen(port, () => console.log(`Server running on port ${port} (role=${WORKER_ROLE})`));
 }
 
