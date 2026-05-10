@@ -41,7 +41,11 @@ export default function HomeScreen() {
                 }
             })
             .then(data => {
-                const socket = new WebSocket(import.meta.env.VITE_WS_URL + `?token=${data.token}`);
+                const rawWs = import.meta.env.VITE_WS_URL as string;
+                const wsBase = /^wss?:\/\//.test(rawWs)
+                    ? rawWs
+                    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}${rawWs}`;
+                const socket = new WebSocket(`${wsBase}?token=${data.token}`);
 
                 socket.addEventListener("message", (event) => {
                     let msg = event.data.toString();

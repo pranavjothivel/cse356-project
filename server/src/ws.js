@@ -54,6 +54,16 @@ function handleSubMessage(raw) {
     // Ignore messages you published
     if (envelope.serverId === serverId) return;
 
+    // ── INSTRUMENTATION (transient, revert as one commit) ──
+    // t_recv = the moment this worker's main thread enters handleSubMessage
+    // for this envelope. publishedAt was stamped by the publisher just
+    // before publishClient.publish(). Difference = end-to-end pubsub
+    // round-trip (publish enqueue → redis-02 main loop → write to
+    // subscriber socket → node-redis client decode → into JS callback).
+    const t_recv = Date.now();
+    const publishedAt = envelope.publishedAt;
+    if (publishedAt) bucketAdd(fanoutLatency.publishToRecv, t_recv - publishedAt);
+
     const msg = envelope.msg;
 
     if (msg.type === "presence") {
@@ -70,6 +80,10 @@ function handleSubMessage(raw) {
           try { conns[k].send("unaway"); } catch (e) { /* ignore broken socket */ }
         });
       }
+      // Single-pass send loop — measure once at the end.
+      const t_send = Date.now();
+      bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+      if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
     }
     else if (msg.type === "fanout") {
       let userIds = msg.userIds;
@@ -82,7 +96,7 @@ function handleSubMessage(raw) {
       // callback, blocking the event loop for N × per-message-time. With
       // chunking, message processing interleaves with everything else.
       setImmediate(() => {
-        deliverLocalChunked(userIds, msg.payload).catch(err => console.error('fanout error:', err));
+        deliverLocalChunked(userIds, msg.payload, t_recv, publishedAt).catch(err => console.error('fanout error:', err));
       });
     }
     else if (msg.type === "fanout_all") {
@@ -91,7 +105,7 @@ function handleSubMessage(raw) {
       // loop to finish.
       const data = typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload);
       setImmediate(() => {
-        fanoutAllChunked(data, msg.excludeUserId).catch(err => console.error('fanout_all error:', err));
+        fanoutAllChunked(data, msg.excludeUserId, t_recv, publishedAt).catch(err => console.error('fanout_all error:', err));
       });
     }
   }
@@ -148,7 +162,15 @@ async function initWSPublisher() {
  */
 async function initWSSubscriber() {
   await subClient.connect();
-  await subClient.subscribe('messages', handleSubMessage);
+  // Per-worker channel for the WS message-delivery hot path. broadcastToUsers
+  // looks up which worker(s) hold each recipient (via presenceClient) and
+  // publishes one small envelope per destination worker, so a worker only
+  // receives `fanout` envelopes whose recipient list intersects its local
+  // `users` Map. Per-publish redis-02 work no longer scales with cluster size.
+  await subClient.subscribe(`messages:${serverId}`, handleSubMessage);
+  // Cluster-wide channel for `presence` and `fanout_all` — these legitimately
+  // need every WS worker to receive them.
+  await subClient.subscribe('messages:global', handleSubMessage);
   console.log("Redis subscriber connected");
 }
 
@@ -244,7 +266,7 @@ function deliverLocal(userIds, payload) {
  * fanout path. Caller is expected to invoke via setImmediate so the first
  * iteration is also off the pub/sub callback's tick.
  */
-async function deliverLocalChunked(userIds, payload) {
+async function deliverLocalChunked(userIds, payload, t_recv, publishedAt) {
   const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
   let count = 0;
   for (const userId of userIds) {
@@ -257,6 +279,14 @@ async function deliverLocalChunked(userIds, payload) {
       }
     }
   }
+  // Instrumentation: record one measurement per envelope at full-deliver time.
+  // Includes any setImmediate yields, so high values here mean either many
+  // recipients or contention with other event-loop work — both worth knowing.
+  if (typeof t_recv === 'number') {
+    const t_send = Date.now();
+    bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+    if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
+  }
 }
 
 
@@ -268,14 +298,142 @@ function logBroadcastMetrics() {
 }
 setInterval(logBroadcastMetrics, 30000);
 
+// ──────────────────────────────────────────────
+// Fanout latency profiling (transient — revert as one commit)
+// ──────────────────────────────────────────────
+// Per-envelope timing of the cross-node WS broadcast pipeline:
+//   publishToRecv = subscriber's handleSubMessage entry - publisher's Date.now()
+//   recvToSend    = end of local deliver (last ws.send returns) - handleSubMessage entry
+//   publishToSend = end of local deliver - publisher's Date.now()
+// Publisher-side timestamp is added to envelopes as `publishedAt`. Subscribers
+// without a publishedAt field skip publishToRecv/publishToSend.
+//
+// Cost: ~3 Date.now() calls per envelope + bucket inserts (constant). Memory:
+// 3 × 512-sample ring buffer ≈ 12 KB per worker. Log line every 30s on the
+// same interval as the existing broadcast metric.
+//
+// Clocks are synced via chrony (~±1 ms across Linode hosts). Sub-ms-accurate
+// readings will be noisy; ms-granularity readings are reliable. Negative values
+// (clock skew) are rejected so they don't poison min/avg.
+function makeBucket(cap = 512) {
+  return { count: 0, sum: 0, min: Infinity, max: 0, samples: [], cap };
+}
+function bucketAdd(b, v) {
+  // Reject impossible values: negatives (clock skew between publisher and
+  // subscriber) and > 60 s (almost certainly a bug, e.g. accidentally adding
+  // an absolute timestamp instead of a delta).
+  if (typeof v !== 'number' || v < 0 || v > 60000) return;
+  b.count++;
+  b.sum += v;
+  if (v < b.min) b.min = v;
+  if (v > b.max) b.max = v;
+  if (b.samples.length < b.cap) b.samples.push(v);
+  else b.samples[b.count % b.cap] = v;
+}
+function bucketReset(b) {
+  b.count = 0; b.sum = 0; b.min = Infinity; b.max = 0; b.samples.length = 0;
+}
+function bucketPct(b, p) {
+  if (b.samples.length === 0) return 0;
+  const sorted = b.samples.slice().sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
+const fanoutLatency = {
+  publishToRecv: makeBucket(),
+  recvToSend:    makeBucket(),
+  publishToSend: makeBucket(),
+};
+function logFanoutLatency() {
+  for (const name of Object.keys(fanoutLatency)) {
+    const b = fanoutLatency[name];
+    if (b.count === 0) continue;
+    const avg = (b.sum / b.count).toFixed(2);
+    console.log(
+      `fanoutLatency.${name}: n=${b.count} avg=${avg}ms ` +
+      `p50=${bucketPct(b, 0.5)}ms p95=${bucketPct(b, 0.95)}ms ` +
+      `p99=${bucketPct(b, 0.99)}ms max=${b.max}ms`
+    );
+    bucketReset(b);
+  }
+}
+setInterval(logFanoutLatency, 30000);
+
+// ──────────────────────────────────────────────
+// Event-loop saturation profiling (transient — same revert as fanoutLatency)
+// ──────────────────────────────────────────────
+// Independent measurement of how busy / blocked the libuv loop is, sampled
+// continuously regardless of whether broadcasts are happening. Two metrics:
+//
+//   eventLoop.lag         — by how much was a scheduled callback late?
+//                           perf_hooks.monitorEventLoopDelay samples lag
+//                           every `resolution` ms; we read p50/p95/p99/max
+//                           every 30 s and reset.
+//
+//   eventLoop.utilization — fraction of wall time the loop was doing work
+//                           (vs sleeping in poll). 0 = idle, 1 = pegged.
+//
+// Reading guide:
+//   high lag + low utilization  →  blocked on I/O wait, GC pause, or sync
+//                                  syscall (rare in node by design)
+//   high lag + high utilization →  CPU saturated (handler work piling up;
+//                                  setImmediate queue draining slower than
+//                                  it fills)
+//   low lag  + high utilization →  busy but keeping up
+//   low lag  + low utilization  →  idle / healthy
+//
+// Cost: monitorEventLoopDelay is a libuv timer at `resolution` ms with
+// nanosecond histogram bookkeeping in C++; designed for production use.
+const { monitorEventLoopDelay, performance } = require('perf_hooks');
+const elDelay = monitorEventLoopDelay({ resolution: 20 });
+elDelay.enable();
+let lastELU = performance.eventLoopUtilization();
+
+function logEventLoop() {
+  const ms = (ns) => (ns / 1e6).toFixed(1);
+  console.log(
+    `eventLoop.lag: mean=${ms(elDelay.mean)}ms ` +
+    `p50=${ms(elDelay.percentile(50))}ms ` +
+    `p95=${ms(elDelay.percentile(95))}ms ` +
+    `p99=${ms(elDelay.percentile(99))}ms ` +
+    `max=${ms(elDelay.max)}ms`
+  );
+  const elu = performance.eventLoopUtilization(lastELU);
+  console.log(`eventLoop.utilization: ${(elu.utilization * 100).toFixed(1)}%`);
+  lastELU = performance.eventLoopUtilization();
+  elDelay.reset();
+}
+setInterval(logEventLoop, 30000);
+
+/**
+ * Pack a UUID array into a tightly-binary Buffer (16 bytes each, no dashes).
+ * Subscriber-side `bufferToUUIDs` reverses this. Lifted out of the per-worker
+ * routing path below so the legacy dual-publish below can reuse it.
+ */
+function packUUIDs(uuids) {
+  return Buffer.concat(uuids.map(u => Buffer.from(u.replace(/-/g, ''), 'hex')));
+}
+
 /**
  * Fan out a JSON payload to all sessions of the given user ids, across every
  * server in the cluster. Use this from REST handlers when a write needs to
  * push a real-time update (message.created, conversation.participants_changed, ...).
+ *
+ * Routing model:
+ *   - Local sessions (this worker holds them) → `deliverLocal` synchronously.
+ *   - Cross-worker sessions → look up presenceClient.users:{id}.body for every
+ *     recipient, group by `c.serverId` (each conn knows which worker holds it,
+ *     written in the connect path), then publish ONE small envelope per
+ *     destination worker to `messages:{destServerId}`. A worker only receives
+ *     `fanout` envelopes containing user-ids it actually has connected.
+ *
+ * Fire-and-forget against the publish path; callers don't await. The HMGET
+ * pipeline adds one redis-01 round-trip (~sub-ms) but the payload going to
+ * redis-02 shrinks from O(N_subscribers × len) to O(N_recipients × len), so
+ * adding more WS workers stops amplifying per-publish redis-02 work.
  */
-function broadcastToUsers(userIds, payload) {
+async function broadcastToUsers(userIds, payload) {
   if (!userIds || userIds.length === 0) return;
-  let date1 = Date.now();
+  const date1 = Date.now();
 
   // Stringify payload exactly once. deliverLocal already accepts string;
   // the publish envelope carries it as a string field so subscriber-side
@@ -284,18 +442,61 @@ function broadcastToUsers(userIds, payload) {
 
   if (HAS_LOCAL_WS) deliverLocal(userIds, payloadStr);
 
-  const buf = Buffer.concat(
-    userIds.map(u => Buffer.from(u.replace(/-/g, ''), 'hex'))
-  );
+  // Look up which worker(s) hold each recipient. One TCP round-trip via
+  // MULTI regardless of recipient-list size. For users with no presence
+  // entry (offline) the result is null and they get skipped — same delivery
+  // outcome as pre-pass-2 (they had no local conn anywhere to deliver to).
+  let bodies;
+  try {
+    const pipeline = presenceClient.multi();
+    for (const id of userIds) pipeline.hGet(`users:${id}`, 'body');
+    bodies = await pipeline.exec();
+  } catch (err) {
+    console.error('broadcastToUsers presence lookup failed:', err);
+    bodies = [];
+  }
 
-  publishClient.publish('messages', JSON.stringify({
-    serverId,
-    msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload: payloadStr },
-  }));
+  // Group recipients by destination worker. Multi-tab users on different
+  // workers contribute one entry per distinct worker. Self-publishes to our
+  // own worker are skipped — local recipients were already handled by
+  // deliverLocal above.
+  const byServer = new Map();   // destServerId -> [userId, ...]
+  for (let i = 0; i < userIds.length; i++) {
+    const raw = bodies[i];
+    if (!raw) continue;
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (e) { continue; }
+    const seen = new Set();     // dedupe across this user's tabs on the same worker
+    const conns = parsed.conns;
+    if (!conns) continue;
+    for (const cid in conns) {
+      const sid = conns[cid] && conns[cid].serverId;
+      if (!sid || sid === serverId || seen.has(sid)) continue;
+      seen.add(sid);
+      let arr = byServer.get(sid);
+      if (!arr) { arr = []; byServer.set(sid, arr); }
+      arr.push(userIds[i]);
+    }
+  }
 
-  let date2 = Date.now();
+  // One publish per destination worker. Each envelope only carries the
+  // user-ids that actually live on the receiving worker, so the receiver's
+  // subscribe-callback work is bounded by its share of the recipient list.
+  // Single publishedAt for the whole broadcast — every per-worker envelope
+  // for this call shares it, so the receiver-side recvToSend / publishToSend
+  // measurements are comparable across destination workers.
+  const publishedAt = Date.now();
+  for (const [destServerId, ids] of byServer) {
+    const buf = packUUIDs(ids);
+    publishClient.publish(`messages:${destServerId}`, JSON.stringify({
+      serverId,
+      publishedAt,
+      msg: { type: 'fanout', userIds: [], userIdsBuf: buf.toString('base64'), payload: payloadStr },
+    }));
+  }
+
   broadcastMetrics.numMessages++;
-  broadcastMetrics.sumProcessing += date2 - date1;
+  broadcastMetrics.sumProcessing += Date.now() - date1;
 }
 
 /**
@@ -317,9 +518,12 @@ function notifyUserAwayFrame(userId, value) {
       }
     }
   }
-  // Cross-server fanout
-  publishClient.publish('messages', JSON.stringify({
+  // Cross-server fanout. presence frames legitimately need every WS worker
+  // to receive them (any worker may hold another tab of this user), so they
+  // go on the cluster-wide `messages:global` channel.
+  publishClient.publish('messages:global', JSON.stringify({
     serverId,
+    publishedAt: Date.now(),
     msg: { id: userId, type: 'presence', value },
   }));
 }
@@ -336,8 +540,11 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
   // responsive to incoming message fanouts during the local send loop.
   // Carry payload as already-stringified so subscriber-side workers don't
   // re-serialize it; avoids a second JSON.stringify cluster-wide per event.
-  publishClient.publish('messages', JSON.stringify({
+  // fanout_all genuinely needs every WS worker to deliver to its locally
+  // connected users, so it lives on `messages:global`.
+  publishClient.publish('messages:global', JSON.stringify({
     serverId,
+    publishedAt: Date.now(),
     msg: { type: 'fanout_all', payload: data, excludeUserId: excludeUserId || null },
   }));
   if (HAS_LOCAL_WS) {
@@ -353,7 +560,7 @@ function broadcastToAllConnected(payload, { excludeUserId } = {}) {
 // several ms — long enough that incoming message-fanout pub/sub callbacks
 // queue behind it. Yielding lets messages interleave during the long fanout.
 const FANOUT_CHUNK = 50;
-async function fanoutAllChunked(data, excludeUserId) {
+async function fanoutAllChunked(data, excludeUserId, t_recv, publishedAt) {
   let count = 0;
   for (const [uid, conns] of users.entries()) {
     if (excludeUserId && uid === excludeUserId) continue;
@@ -363,6 +570,11 @@ async function fanoutAllChunked(data, excludeUserId) {
         await new Promise(setImmediate);
       }
     }
+  }
+  if (typeof t_recv === 'number') {
+    const t_send = Date.now();
+    bucketAdd(fanoutLatency.recvToSend, t_send - t_recv);
+    if (publishedAt) bucketAdd(fanoutLatency.publishToSend, t_send - publishedAt);
   }
 }
 
@@ -609,9 +821,12 @@ const configureWSServer = (wss) => {
             }
           }
           if (crossServerAwayFrame) {
-            // Sync user's own other sessions (cross-server) for away/unaway
-            publishClient.publish("messages", JSON.stringify({
+            // Sync user's own other sessions (cross-server) for away/unaway.
+            // presence frames go on `messages:global` so every WS worker
+            // delivers to any local tabs of this user.
+            publishClient.publish('messages:global', JSON.stringify({
               serverId,
+              publishedAt: Date.now(),
               msg: { id, type: msg.type, value: msg.value }
             }));
           }
@@ -743,7 +958,13 @@ const configureWSServer = (wss) => {
         // still computes finalPresence from all existing conns (which will
         // still have presence='away'), so the new conn's 'online' is
         // overridden by the away priority and finalPresence stays 'away'.
-        const newConn = { presence: "online", base: "online" };
+        //
+        // serverId records which worker process holds this WebSocket so pass-2
+        // `broadcastToUsers` can route the cross-node fanout to the specific
+        // worker(s) that have the recipient connected, instead of broadcasting
+        // to every WS worker. Multi-tab on different workers naturally produces
+        // distinct serverId entries across this user's `conns`.
+        const newConn = { presence: "online", base: "online", serverId };
 
         let user;
         if (existingStr) {

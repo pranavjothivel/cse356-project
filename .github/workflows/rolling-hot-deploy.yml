@@ -528,9 +528,9 @@ jobs:
         if: steps.fe.outputs.exists == 'true'
         working-directory: client
         env:
-          VITE_BACKEND_URL: https://group1.cse356.compas.cs.stonybrook.edu/api
-          VITE_WS_URL: wss://group1.cse356.compas.cs.stonybrook.edu/api
-          VITE_IMAGE_URL: https://group1.cse356.compas.cs.stonybrook.edu/minio/images
+          VITE_BACKEND_URL: /api
+          VITE_WS_URL: /api
+          VITE_IMAGE_URL: /minio/images
         run: npm ci && npm run build
 
       - name: Set up SSH key

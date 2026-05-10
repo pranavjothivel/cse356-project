@@ -41,6 +41,43 @@ app_nodes:
     private_ip: 10.0.2.10
     type: 8vcpu-16gb
     ws_only: true
+  # WS pool extension parked 2026-05-08. Brought in to double WS capacity
+  # (4 → 8 nodes) but doubling the redis-02 subscriber count doubled
+  # per-publish fanout work and saturated the single-threaded Redis —
+  # subscribers fell minutes behind, self-echo latency went to seconds.
+  # Stopped via `pm2 stop cse356` on each box. Commented out here so the
+  # deploy pipeline skips them; haproxy.cfg / haproxy-lb02.cfg keep
+  # node8-11 entries `disabled` so the names remain configured. To bring
+  # back: shrink the ~180KB-per-fanout payload (or shard pubsub) first,
+  # uncomment, and remove `disabled` from both haproxy variants together.
+  # - name: group1-api-node-04b
+  #   ip: 130.245.136.230
+  #   private_ip: 10.0.2.240
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-05a
+  #   ip: 130.245.136.85
+  #   private_ip: 10.0.0.7
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-06a
+  #   ip: 130.245.136.220
+  #   private_ip: 10.0.1.133
+  #   type: 8vcpu-16gb
+  #   ws_only: true
+  # - name: group1-api-node-07a
+  #   ip: 130.245.136.79
+  #   private_ip: 10.0.1.4
+  #   type: 8vcpu-16gb
+  #   ws_only: true
 
 lb_node: 130.245.136.254
+# Second active LB provisioned 2026-05-07 (group1-lb-02). 32 vCPU / 60 GB,
+# Ubuntu 22.04, BBR + heavy TCP tune (see infra/lb-sysctl-heavy.conf).
+# Identical HAProxy 2.4.30 config + same Let's Encrypt cert; Nginx serves the
+# same SPA bundle and proxies /minio/ → 10.0.1.28:9000 on lb01 (no local
+# MinIO). The deploy pipeline currently pushes app/frontend/haproxy/nginx
+# only to lb_node above; lb02 must be updated out-of-band until the pipeline
+# is taught to fan out (see infra/README "Deploying to both LBs").
+# lb_node_secondary: 130.245.136.142  # private 10.0.0.97 (group1-lb-02)
 telemetry_node: 130.245.136.96

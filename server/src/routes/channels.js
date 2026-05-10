@@ -1,9 +1,15 @@
 const { Router } = require('express');
+const { sequelize } = require('../db');
 const { Channel, ChannelMember, CommunityMember, Community, User } = require('../models');
 const Message = require('../models/Message');
 const { broadcastToUsers } = require('../ws');
 const { isForwardRead } = require('../util/readReceipts');
 const { invalidateChannelMemberCache, invalidateChannelMember, getMessage, getChannelCommunity, invalidateUnreadChannelsForUser } = require('./messages');
+
+// Mirrors CHANNEL_ENROLL_BATCH in routes/communities.js — keep INSERTs under
+// statement_timeout when transitioning a private channel public in a large
+// community.
+const CHANNEL_ENROLL_BATCH = 500;
 
 const router = Router();
 
@@ -51,22 +57,32 @@ router.patch('/:channelId', async (req, res, next) => {
     const { channel } = result;
 
     const { name, is_private } = req.body;
-    if (name !== undefined) channel.name = name.trim();
 
-    // Handle private→public transition: add all community members
-    if (is_private !== undefined && channel.is_private && !is_private) {
-      const members = await CommunityMember.findAll({
-        where: { community_id: channel.community_id },
-        attributes: ['user_id'],
-      });
-      await ChannelMember.bulkCreate(
-        members.map(m => ({ channel_id: channel.id, user_id: m.user_id })),
-        { ignoreDuplicates: true }
-      );
-    }
+    await sequelize.transaction(async (t) => {
+      if (name !== undefined) channel.name = name.trim();
 
-    if (is_private !== undefined) channel.is_private = is_private;
-    await channel.save();
+      // private→public transition: enroll all community members. Chunked
+      // and wrapped with the channel.save() so a partial enrollment can't
+      // leave the channel public with near-zero membership.
+      if (is_private !== undefined && channel.is_private && !is_private) {
+        const members = await CommunityMember.findAll({
+          where: { community_id: channel.community_id },
+          attributes: ['user_id'],
+          transaction: t,
+        });
+        for (let i = 0; i < members.length; i += CHANNEL_ENROLL_BATCH) {
+          await ChannelMember.bulkCreate(
+            members.slice(i, i + CHANNEL_ENROLL_BATCH).map(m => ({
+              channel_id: channel.id, user_id: m.user_id,
+            })),
+            { ignoreDuplicates: true, transaction: t }
+          );
+        }
+      }
+
+      if (is_private !== undefined) channel.is_private = is_private;
+      await channel.save({ transaction: t });
+    });
 
     res.json({ channel: { id: channel.id, name: channel.name, is_private: channel.is_private } });
   } catch (err) { next(err); }
