@@ -15,6 +15,7 @@ cse356-project/
 │       ├── auth/              ← login + OAuth-link UI
 │       └── components/        ← chat UI, search, settings, etc.
 ├── server/                    ← Node backend (Express 5, ws, Sequelize, Redis)
+│   ├── .env.example           ← sanitized prod env template; copy to .env locally
 │   ├── src/
 │   │   ├── app.js             ← entry: middleware, route mounts, listen
 │   │   ├── db.js              ← Sequelize instances (main + search pool)
@@ -52,6 +53,7 @@ cse356-project/
 │                                 public docs in project-docs/)
 ├── loadgen-reports/           ← archived loadgen run outputs
 ├── scripts/                   ← repo-level scripts (e.g. tls-probe)
+├── smoke-tests/               ← post-deploy sanity checks (run.sh + README)
 └── .github/workflows/         ← CI/CD pipelines (deploy.yml, rolling-hot-deploy.yml,
                                  ci.yml, minio-volume-*.yml)
 ```
@@ -102,16 +104,23 @@ Append a block to `infra/nodes.yml` and push. The deploy pipeline picks it up on
 
 ## Running tests
 
-The project does not have a unit-test suite. The verification surface is:
+The verification surface, lightest to heaviest:
+
+- **Smoke tests** — [`smoke-tests/run.sh`](../smoke-tests/run.sh) hits a target deployment and verifies the SPA, REST routing, OAuth redirect, and WebSocket upgrade all behave. Safe to run from a laptop or as a post-deploy gate; exits non-zero on any failure. See [`smoke-tests/README.md`](../smoke-tests/README.md) for the checklist of checks.
+
+  ```bash
+  ./smoke-tests/run.sh                                # default: prod LB
+  TARGET=http://localhost:3000 ./smoke-tests/run.sh    # local dev backend
+  ```
 
 - **Manual smoke** — open the SPA at `https://group1.cse356.compas.cs.stonybrook.edu`, log in, send a message in a community and a DM. Check the per-component sections of [SCALING.md](SCALING.md) for the regression risks that have bitten us before.
-- **Loadgen** — bot clients drive the system the same way the autograder does. Reports archived under `loadgen-reports/`. Filename convention: `2026-MM-DD-<scope>-<state>.{json,log}`. The JSON is the run summary; the `.log` has per-request traces.
+- **Load generator runs** — headless API-driven clients drive the system the same way the course's grading load generator does. Reports archived under `loadgen-reports/`. Filename convention: `2026-MM-DD-<scope>-<state>.{json,log}`. The JSON is the run summary; the `.log` has per-request traces.
 - **TLS-probe** — `scripts/tls-probe/tls-probe.sh` measures cold-handshake latency at the LB; useful to isolate LB-side jitter from app-side cost.
 - **PM2 health** — `sudo -u deploy pm2 jlist | jq` after a deploy; rising `restarts` is a smell.
 - **HAProxy stats** — `:8404/stats` on either LB. Backend column color = health.
-- **Sentry / Grafana** — Sentry is currently disabled in the codepath; Grafana dashboards on `group1-telemetry-01` are the live eye.
+- **Telemetry stack** — Grafana Cloud dashboards (Loki for logs + Prometheus/Mimir for metrics, fed by Grafana Alloy on `group1-telemetry-01`); Axiom for HAProxy access-log tail; Sentry for unhandled exceptions (currently disabled in the codepath, kept for re-enable).
 
-A future improvement would be a small Jest + supertest integration suite against a dockerized PG + Redis. Out of scope for the term project.
+A future improvement would be a dockerized Jest + supertest integration suite covering the auth flow + message-send + WS broadcast against an ephemeral PG + Redis stack. Out of scope for the term project.
 
 ## Debugging common problems
 
@@ -136,7 +145,7 @@ Pub/sub fanout overload on Redis-02. The fix is structural (per-worker channels 
 `deploy-lb-configs` reloads HAProxy after a deploy, which **wipes runtime `state ready` overrides**. If you marked a backend `disabled` in the config and re-enabled it via socket, the reload reverts. The fix: don't ship new backends as `disabled` in the config; rely on the default health-check window to hold them DOWN until they pass. See `feedback_haproxy_runtime_state_lost_on_reload` in the memory store, and the parked-pool comments in `infra/haproxy/haproxy.cfg`.
 
 ### "Logged in but no presence updates"
-The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The autograder client had this bug too — see [`claude-docs/performance-tuning.md`](../claude-docs/performance-tuning.md) Fix 3.
+The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The headless API-driven load generator clients hit this bug too — see [`claude-docs/performance-tuning.md`](../claude-docs/performance-tuning.md) Fix 3.
 
 ## Known issues / future improvements
 
