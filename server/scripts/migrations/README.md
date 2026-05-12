@@ -25,14 +25,27 @@ This bloats the table and makes every insert progressively slower.
 
 Dev still uses `alter: true` for convenience (see `src/app.js`).
 
+## Layout
+
+- `0007-baseline-schema.sql` — `pg_dump --schema-only` snapshot of the
+  production `cse356` database (8 tables, 9 indexes, 3 extensions: pg_prewarm,
+  pg_stat_statements, pg_trgm). Captured directly from `group1-db-psql-01`
+  for reproducibility; reflects the cumulative effect of every prior
+  migration plus the duplicate `*_name_key{N}` artifacts the `alter: true`
+  bug left behind in earlier boots.
+- `legacy/0002-…` through `legacy/0006-…` — pre-baseline migrations,
+  already applied to the production DB. Kept for history; new bootstraps
+  should run `0007-baseline-schema.sql` alone.
+
 ## Naming
 
 ```
 NNNN-short-description.sql
 ```
 
-`NNNN` is a zero-padded sequence number starting at `0001`. The number must
-increase monotonically — pick the next available number when you add a file.
+`NNNN` is a zero-padded sequence number. The number must increase
+monotonically — pick the next available number after the highest in this
+directory (currently `0007`) when you add a file.
 
 ## Example
 
