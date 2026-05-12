@@ -237,10 +237,33 @@ const users = new Map();
 const connections = new Map();
 
 
-// Ping/pong disabled — confirmed independently causes latency spikes
-// via Redis SET contention on the shared delivery client.
-// To re-enable, use a dedicated Redis client for conns: writes.
-// See PR #120 / #128 for test results.
+/**
+ * Pings all local connections whose ids start with firstCharInId
+ * 
+ * Used to spread pings equally over the interval to reduce any potential load from pong writes
+ */
+function pingLocalConnections(firstCharInId) {
+  let time1 = Date.now();
+  let connectionsArray = [...connections];
+  for (let i = 0; i < connectionsArray.length; i++) {
+    if (connectionsArray[i][0][0] !== firstCharInId) continue;
+    
+    let ws;
+    try { ws = connectionsArray[i][1].ws; } catch (e) {}
+    if (!ws) continue;
+
+    try {
+      ws.ping();
+    }
+    catch (e) {ws.close();}
+  }
+
+  let time2 = Date.now();
+  console.log(`Pinged local connections starting with ${firstCharInId} in ${time2-time1}ms`);
+}
+let idChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+for (let i = 0; i <= 15; i++)
+  setTimeout(() => {setInterval(pingLocalConnections, 120000, idChars[i])}, 7500*i);
 
 
 /**
@@ -846,7 +869,15 @@ const configureWSServer = (wss) => {
       }
     });
 
-    // ws.on('pong') removed — see PR #128
+    ws.on('pong', async () => {
+      try {
+        await redisClient.set(`conns:${connId}`, 1, { EX: 240 });
+      }
+      catch (err) {
+        console.log(err);
+        ws.close();
+      }
+    });
 
     ws.on('close', async () => {
       if (!id) return; // init failed, nothing to clean up
@@ -994,7 +1025,7 @@ const configureWSServer = (wss) => {
         else conns[connId] = ws;
         connections.set(connId, { userId: id, ws });
 
-        // conns: SET removed — part of ping/pong, see PR #128
+        await redisClient.set(`conns:${connId}`, 1, { EX: 240 });
 
         await initRelease();
       }
