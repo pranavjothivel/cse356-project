@@ -48,6 +48,7 @@ cse356-project/
 │   ├── SCALING.md
 │   ├── DEVELOPER-GUIDE.md     ← (you are here)
 │   ├── TEAM.md
+│   ├── IMPROVEMENTS.md
 │   └── diagrams/
 ├── claude-docs/               ← raw session notes / decision logs (source for the
 │                                 public docs in project-docs/)

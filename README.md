@@ -35,13 +35,16 @@ psql "$DATABASE_URL" -f server/scripts/migrations/0007-baseline-schema.sql
 
 **Production deploy:** GitHub Actions, two pipelines — `deploy.yml` (full parallel deploy on `workflow_dispatch`) and `rolling-hot-deploy.yml` (node-by-node drain → deploy → un-drain). Runbook in [`infra/README.md`](infra/README.md). Detail in **[project-docs/DEPLOYMENT.md](project-docs/DEPLOYMENT.md)**.
 
-**Running operations:** PM2 runs the app cluster on each node under the `deploy` user. Common commands:
+**Running operations (start / stop / status):** PM2 runs the app cluster on each node under the `deploy` user. Common commands:
 ```bash
 sudo -u deploy pm2 list                                  # status
-sudo -u deploy pm2 reload ecosystem.config.js            # zero-downtime reload
+sudo -u deploy pm2 start /srv/app/ecosystem.config.js    # start
+sudo -u deploy pm2 reload ecosystem.config.js            # graceful zero-downtime reload
+sudo -u deploy pm2 stop cse356                           # stop
 sudo -u deploy pm2 logs --lines 200                      # tail logs
 systemctl reload haproxy                                 # LB config reload
 ```
+Local dev: `Ctrl-C` to stop `npm run dev`.
 
 **Testing:** Run the Jest smoke suite for post-deploy sanity checks (SPA serves, REST routing, OAuth redirect, WS upgrade):
 
@@ -76,15 +79,19 @@ The remaining limitations (dual-table FTS, read replica, AOF on Redis-01, no aut
 
 Brief; each has a paragraph in [project-docs/ARCHITECTURE.md](project-docs/ARCHITECTURE.md#design-decisions).
 
-- **Two Redis instances** (sessions/cache/presence on `:6379`, pub/sub on `:6380`) — keeps fanout traffic from competing with read-modify-write presence on a shared event loop.
+- **Data storage** — Postgres as the primary durable store (single primary, WAL on NVMe); Redis for sessions/cache/presence/mutex on `:6379` and a dedicated pub/sub bus on `:6380`; MinIO (S3-compatible) for image attachments.
+- **Caching strategy** — write-through Redis caches for hot reads (channel members, channel-community map, message bodies, unread counts) sit behind `cacheClient`; the message-send hot path reads members from cache to avoid a Postgres round-trip on every broadcast; cache invalidation happens explicitly at the relevant write sites.
 - **PgBouncer in transaction mode** on each app node — multiplexes worker connections onto a small number of real Postgres connections; we don't use any session-scoped feature it would break.
-- **No sticky sessions** — all shared state lives in Redis-01 or Redis-02; HAProxy uses `leastconn` for both REST and WS, freely round-robining.
-- **Per-worker pub/sub channels** — broadcasts only target workers that actually hold a recipient socket; adding subscribers no longer makes publishing more expensive.
+- **Load balancing — no sticky sessions** — all shared state lives in Redis-01 or Redis-02; HAProxy uses `leastconn` for both REST and WS, freely round-robining.
+- **Message delivery — per-worker pub/sub channels** — broadcasts only target workers that actually hold a recipient socket; adding subscribers no longer makes publishing more expensive. The publish happens *after* the HTTP response so a slow broadcast cannot block the writer.
+- **Concurrency model** — single-threaded Node.js per PM2 worker, one worker per vCPU (PM2 cluster mode). All coordination happens out-of-process via Redis (sessions, presence, mutex, pub/sub). No worker-to-worker IPC.
 - **`WORKER_ROLE` split** (`http`/`ws`/`all`) — pins WS work to dedicated nodes and lets API nodes skip pub/sub fanout entirely.
+- **Fault tolerance / retry** — HAProxy `option redispatch` + `retry-on all-retryable-errors 503` so a single node's transient 503 retries to a different node; `option httpchk GET /` on both backends; the OIDC strategy is fire-and-forget at boot so a Keycloak outage can't crash a worker into a restart loop.
+- **Distributed mutex on presence** — read-modify-write of the user's presence body is held under a per-user lock to avoid lost updates.
 - **PostgreSQL FTS over Elasticsearch** — at our scale, GIN-indexed FTS is plenty and avoids a second stateful service.
 - **MinIO over NFS** — S3-compatible API is a more stable abstraction; LB-side Nginx serves `/minio/*` to clients without involving app nodes.
-- **Distributed mutex on presence** — read-modify-write of the user's presence body is held under a per-user lock to avoid lost updates.
-- **All routes under `/api/*`** — HAProxy can route by path prefix unambiguously; WS upgrades are detected by `hdr(Upgrade) -i websocket`, not by path.
+- **API design — all routes under `/api/*`** — HAProxy can route by path prefix unambiguously; WS upgrades are detected by `hdr(Upgrade) -i websocket`, not by path. 4xx for client errors, 5xx reserved for unexpected server failures only.
+- **Security / authentication** — bcrypt for local accounts; Google + GitHub + course OIDC (Keycloak) via Passport strategies; multi-provider linking via a `User.providers` JSONB array; each login issues an independent session row in Redis so per-session logout doesn't affect a user's other devices.
 - **Schema discipline** — production runs `sync()` *without* `alter`; schema changes go through numbered SQL files in `server/scripts/migrations/`.
 
 ## 5. Developer Guide
@@ -92,14 +99,15 @@ Brief; each has a paragraph in [project-docs/ARCHITECTURE.md](project-docs/ARCHI
 Detail in **[project-docs/DEVELOPER-GUIDE.md](project-docs/DEVELOPER-GUIDE.md)**. The bird's-eye view:
 
 ```
-client/   ← React SPA (Vite + TS)
+client/                 ← React SPA (Vite + TS)
 server/
+  .env.example          ← sanitized prod env template; copy to .env locally
   src/
-    app.js         ← entry, middleware, route mounts
-    ws.js          ← WebSocket server + per-worker pub/sub fanout
-    redis.js       ← per-purpose Redis clients
-    routes/        ← REST handlers (one file per resource)
-    models/        ← Sequelize models
+    app.js              ← entry, middleware, route mounts
+    ws.js               ← WebSocket server + per-worker pub/sub fanout
+    redis.js            ← per-purpose Redis clients
+    routes/             ← REST handlers (one file per resource)
+    models/             ← Sequelize models
   scripts/migrations/   ← numbered SQL migrations (0007-baseline-schema.sql is current)
   ecosystem.config.js   ← PM2 cluster config
 infra/
@@ -109,7 +117,9 @@ project-docs/           ← public-facing docs (this folder)
 claude-docs/            ← raw session notes (source for project-docs/)
 loadgen-reports/        ← outputs from our ad-hoc loadgen runs
                           (not the course grading load generator)
-.github/workflows/      ← deploy.yml + rolling-hot-deploy.yml
+scripts/                ← repo-level scripts (e.g. tls-probe)
+smoke-tests/            ← Jest-based post-deploy sanity checks
+.github/workflows/      ← deploy.yml + rolling-hot-deploy.yml + ci.yml + minio-volume-*.yml
 ```
 
 To add a feature, run tests, or debug something that's been seen before — see the corresponding section in **[project-docs/DEVELOPER-GUIDE.md](project-docs/DEVELOPER-GUIDE.md)**.
@@ -125,7 +135,7 @@ To add a feature, run tests, or debug something that's been seen before — see 
 
 **Communication & process** — primary channel is the team Discord, with **Sentry** (unhandled exceptions thrown by app workers, with stack trace and request context), **Grafana Cloud** (Loki logs + Prometheus metrics), and **Axiom** (HAProxy access-log tail) alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered — or whoever could look at the issue ASAP) rather than top-down assigned. The course timeline had two phases: **pre-4/13** was API Tests + a small-scale **Test Traffic Period** (load-generator traffic was opt-in, gated on 100% API Tests passing), and **4/13 → 5/8** was the **Live Period** — the same course grading load generator shape as Test Traffic but at much greater scale. We finished the majority of feature work before 4/13 so the Live Period could be spent chasing bugs that didn't surface at Test Traffic volume; "what's the binding constraint right now" framed each new round of work.
 
-**Full per-member contribution detail with commit citations: [project-docs/TEAM.md](project-docs/TEAM.md).**
+**Full per-member contribution detail: [project-docs/TEAM.md](project-docs/TEAM.md).**
 
 ---
 

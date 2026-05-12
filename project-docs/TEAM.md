@@ -18,6 +18,11 @@
 - Production incident response and the observability stack (Grafana Cloud, OTel, Axiom, Sentry integration)
 - Sustained performance-tuning work across HAProxy, PostgreSQL, Redis, and PM2
 
+**Leadership / coordination**
+- De-facto infrastructure lead — owned the deploy model and the GHA pipelines from inception through the term, which made him the natural point person whenever a deploy needed unusual handling (rolling hot-deploy of a one-off node, mid-incident LB config push, etc.).
+- Lead investigator on the **4/15 sendMessage 403 surge** — drove the diagnosis on the course forum thread with the instructor, shipped the temporary `sendMessage` fall-back, then reverted it once the upstream patch landed. Coordinated the timing with the course-side fix.
+- Coordinated the mid-term LB host migration (the BBR + heavy-sysctl-tuned successor) across infra config, deploy pipeline, and HAProxy backend updates.
+
 **Major contributions**
 - **Foundational features** — Communities + channels (API + UI), read-state for channels and DMs, DM read receipts over WebSocket, OAuth provider linking/unlinking in account settings, FTS jump-to-message in search, MinIO volume + resize pipeline, secured impersonation endpoint to debug as a user created by the grading infra's load generators.
 - **Foundational infrastructure** — Built out the cluster from the first app node to the final 8-node topology. Authored the matrix-on-`infra/nodes.yml` deploy model and the majority of the GitHub Actions pipelines (`deploy.yml`, `rolling-hot-deploy.yml`, `ci.yml`, MinIO volume CI/resize). Drove the mid-term LB migration to a heavily-tuned successor host (BBR + `infra/lb-sysctl-heavy.conf`) after the original LB hit its CPU and tuning ceiling. Grew the node inventory from 1 → 8 app nodes including the `WORKER_ROLE=http`-only node (`api-node-http-01`).
@@ -38,6 +43,11 @@
 - MinIO infrastructure setup and attachment delivery path
 - Application-level metrics and the distributed mutex (`simple-redis-mutex`) behavior
 
+**Leadership / coordination**
+- Owned the real-time WebSocket layer end-to-end — anything that touched the `ws.js` surface (presence, broadcasts, dead-connection cleanup, mutex behavior) went through Chris for review or design input.
+- Set up the MinIO attachment infrastructure from scratch and remained the team's point person for storage-layer questions (avatars, image uploads, size limits).
+- Built the per-node metrics surface (`GET /api/metrics`) that the rest of the team used during tuning passes — coordination role on what got measured.
+
 **Major contributions**
 - **MinIO infrastructure** — Stood up MinIO for attachment storage, wired it into the upload path on the app nodes, and integrated avatar handling against the same bucket. Image attachments in conversations and direct-channel messages with edit + delete support; per-message and per-user upload size limits.
 - **Metrics** — Built an in-process per-node request-rate / response-time metrics surface (one rolling counter per route) and a `GET /api/metrics` endpoint that renders it. Per-handler metrics on the WS message handler; instrumented `broadcastToUsers` so per-broadcast cost was visible; added p95 estimation on top of the rolling sample using a last-500-batch average.
@@ -55,6 +65,11 @@
 - File upload and attachment system
 - Message-send hot-path optimization and HAProxy CPU tuning
 
+**Leadership / coordination**
+- Owned the user-facing core surface — authentication, attachments, search — the three subsystems that every user interacts with in the first thirty seconds of using the app.
+- Coordinated the message-send hot-path performance work with the WS layer (Chris) and the DB layer (Pranav), since the eliminate-re-fetch + async-broadcast + member-cache changes had to fit together to be useful.
+- Drove the HAProxy CPU tuning pass; coordinated with Pranav (who owned the higher-level HAProxy config) on which parameters to land in `infra/haproxy/haproxy.cfg`.
+
 **Major contributions**
 - **Authentication** — Implemented the local-account + OAuth (Google, GitHub, course OIDC) flow including multi-provider account linking, the `req.session.pendingOAuth` "link-or-create" UX, and the `/auth/oauth-connect` frontend page.
 - **Search** — Built the PostgreSQL FTS-based search; experimented with trigram `ILIKE` as an alternative before settling on FTS for the production path.
@@ -71,6 +86,11 @@
 - Direct conversations (one-to-one and group DMs)
 - Cross-cutting messaging and presence optimization
 - Issue tracking and capacity scaling (vertical + horizontal)
+
+**Leadership / coordination**
+- Owned the direct-conversation subsystem end-to-end — DM and group-DM data model, participant lifecycle (leave-but-conversation-survives + erase-when-empty), and the read-receipt UX.
+- De-facto issue-tracking lead — kept GitHub issues, Grafana alerts, and Discord threads cross-referenced so a single problem didn't get diagnosed twice from different angles.
+- Drove the capacity-scaling decisions: which nodes to vertically resize, when to add a new app node, how to redistribute traffic via HAProxy backend pool changes.
 
 **Major contributions**
 - **Direct conversations** — Implemented the DM and group-DM subsystem including the participant list, the "leave but conversation survives" lifecycle, and the "everyone leaves → conversation erased" semantics.

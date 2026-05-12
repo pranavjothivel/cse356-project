@@ -28,7 +28,7 @@ Source: [`diagrams/architecture.mmd`](diagrams/architecture.mmd) (mermaid).
 2. HAProxy ACL routes `/api/*` to the API pool with `leastconn` balancing.
 3. API worker authenticates via session cookie → looks up session in Redis-01 → `passport.deserializeUser` hits the user cache (60s TTL) before falling back to Postgres.
 4. Handler runs business logic, talks to Postgres via local PgBouncer and Redis-01 for cached members / unread state.
-5. For writes that broadcast, the response is returned *before* the broadcast publishes — the publish happens post-response, async (`#164`).
+5. For writes that broadcast, the response is returned *before* the broadcast publishes — the publish happens post-response, async, so a slow broadcast can never block the writer.
 
 ## Request flow (WebSocket message broadcast)
 
