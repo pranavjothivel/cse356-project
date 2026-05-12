@@ -54,6 +54,18 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 - **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
 - **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
 
+#### gRPC for internal macroservice communication
+
+Once the macroservices land, internal hops (`messages-coordinator` → `storage`, `presence-pubsub` → `auth`, etc.) need a wire protocol. **gRPC over HTTP/2** is the right default for internal RPCs:
+
+- **Protobuf contracts** caught at compile time, not at runtime when a downstream service silently ignores an unknown field. Versioned, language-agnostic — if we ever add a Go ETL job or a Python ML service it generates a client from the same `.proto`.
+- **HTTP/2 multiplexing** lets `messages-coordinator` fire its three concurrent queued writes (Postgres, search, broadcast-publish) over one TCP connection per downstream — no per-RPC connection-pool bloat, no HTTP/1.1 head-of-line wait.
+- **Streaming RPCs** map cleanly to a few hot paths — presence-change deltas from `presence-pubsub` → consumers; search-index commit stream from `messages-coordinator` → `search`.
+- **Deadline propagation.** A `POST /api/messages` with a 200 ms budget becomes a `200 ms − elapsed` deadline on every downstream hop; services can shed load instead of running to completion on a request the caller already abandoned.
+- **Binary wire format** — measurably cheaper to encode/decode than JSON for the chatty inter-service paths, which adds up across the three-hop write fan-out.
+
+Browser-facing edge stays REST + JSON (that's what the SPA and the course grading load generator speak). The Gateway API translates incoming REST → outbound gRPC for downstream hops.
+
 #### Lock-free synchronization in place of the Redis mutex
 
 Today's presence updates take a `simple-redis-mutex` per user before doing a read-modify-write on the presence hash — 5 Redis round-trips per update (`SET NX PX` lock acquire, `HGET body`, `JSON.parse` + JS mutation, `HSET body`, `EVALSHA release`), and the release script publishes a notification fanout to every PM2 worker subscribed to `@simple-redis-mutex:locks-releases`. Under WS connect/disconnect churn that lock-release fanout was a real cost on the data-side Redis instance (it shows up in `commandstats`).
