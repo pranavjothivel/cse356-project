@@ -1,0 +1,374 @@
+{
+  "config": {
+    "BASE_URL": "https://group1.cse356.compas.cs.stonybrook.edu",
+    "NUM_RECIPIENTS": 500,
+    "NUM_SENDERS": 20,
+    "MSGS_PER_SEC": 50,
+    "DURATION_SEC": 300,
+    "RAMP_SEC": 30,
+    "COOLDOWN_SEC": 15
+  },
+  "run": {
+    "startedAt": "2026-05-05T20:01:38.213Z",
+    "finishedAt": "2026-05-05T20:07:49.834Z",
+    "durationSec": 371.621,
+    "communityId": "51d6a911-b993-4e35-8d84-7a0f21e4a78c",
+    "channelId": "f35f1dcc-c5f3-464c-9e72-ccae869d3ad4"
+  },
+  "counters": {
+    "messagesPosted": 13595,
+    "messagesPostFailed": 0,
+    "samples": 6797500,
+    "outOfOrderReceives": 0,
+    "selfReceives": 0,
+    "stillPending": 13595
+  },
+  "latencyMs": {
+    "count": 6797500,
+    "min": 14.780603,
+    "p50": 291.455471,
+    "p90": 1459.099897,
+    "p95": 2093.46247,
+    "p99": 3422.464317,
+    "p999": 4812.542194,
+    "max": 6061.973411,
+    "mean": 561.1604491714751
+  },
+  "timelineP95": [
+    {
+      "windowStartSec": 0,
+      "samples": 30000,
+      "p50": 184.100383,
+      "p95": 430.982383,
+      "max": 1257.963361
+    },
+    {
+      "windowStartSec": 10,
+      "samples": 116000,
+      "p50": 154.633241,
+      "p95": 379.719284,
+      "max": 935.715267
+    },
+    {
+      "windowStartSec": 20,
+      "samples": 194000,
+      "p50": 196.696189,
+      "p95": 601.657494,
+      "max": 1969.374983
+    },
+    {
+      "windowStartSec": 30,
+      "samples": 240000,
+      "p50": 475.440526,
+      "p95": 1550.707804,
+      "max": 2500.521172
+    },
+    {
+      "windowStartSec": 40,
+      "samples": 238000,
+      "p50": 194.558756,
+      "p95": 430.123548,
+      "max": 1103.386524
+    },
+    {
+      "windowStartSec": 50,
+      "samples": 210000,
+      "p50": 280.971993,
+      "p95": 811.033598,
+      "max": 2017.501345
+    },
+    {
+      "windowStartSec": 60,
+      "samples": 216000,
+      "p50": 271.8588,
+      "p95": 704.750479,
+      "max": 1525.290543
+    },
+    {
+      "windowStartSec": 70,
+      "samples": 225000,
+      "p50": 247.723081,
+      "p95": 839.224672,
+      "max": 2632.111054
+    },
+    {
+      "windowStartSec": 80,
+      "samples": 219500,
+      "p50": 651.371391,
+      "p95": 3311.084732,
+      "max": 4680.093011
+    },
+    {
+      "windowStartSec": 90,
+      "samples": 220500,
+      "p50": 898.815488,
+      "p95": 3273.572294,
+      "max": 4652.329147
+    },
+    {
+      "windowStartSec": 100,
+      "samples": 217000,
+      "p50": 260.689549,
+      "p95": 1408.415183,
+      "max": 3925.317814
+    },
+    {
+      "windowStartSec": 110,
+      "samples": 230000,
+      "p50": 294.601757,
+      "p95": 1876.004047,
+      "max": 3947.559135
+    },
+    {
+      "windowStartSec": 120,
+      "samples": 230000,
+      "p50": 1006.598735,
+      "p95": 2742.57437,
+      "max": 4055.992509
+    },
+    {
+      "windowStartSec": 130,
+      "samples": 200000,
+      "p50": 332.336844,
+      "p95": 1410.321674,
+      "max": 2764.697669
+    },
+    {
+      "windowStartSec": 140,
+      "samples": 220000,
+      "p50": 280.309123,
+      "p95": 1748.117614,
+      "max": 4084.460774
+    },
+    {
+      "windowStartSec": 150,
+      "samples": 228000,
+      "p50": 334.60247,
+      "p95": 1872.736377,
+      "max": 2393.118113
+    },
+    {
+      "windowStartSec": 160,
+      "samples": 237000,
+      "p50": 206.308076,
+      "p95": 2280.708282,
+      "max": 3464.893291
+    },
+    {
+      "windowStartSec": 170,
+      "samples": 200000,
+      "p50": 364.982579,
+      "p95": 1854.277818,
+      "max": 3095.427129
+    },
+    {
+      "windowStartSec": 180,
+      "samples": 202500,
+      "p50": 319.874905,
+      "p95": 2097.233952,
+      "max": 3391.72775
+    },
+    {
+      "windowStartSec": 190,
+      "samples": 177500,
+      "p50": 614.24073,
+      "p95": 3209.945486,
+      "max": 4828.941711
+    },
+    {
+      "windowStartSec": 200,
+      "samples": 220000,
+      "p50": 251.667088,
+      "p95": 594.942532,
+      "max": 1625.03448
+    },
+    {
+      "windowStartSec": 210,
+      "samples": 170000,
+      "p50": 391.552087,
+      "p95": 1715.178089,
+      "max": 2765.616234
+    },
+    {
+      "windowStartSec": 220,
+      "samples": 180000,
+      "p50": 339.23575,
+      "p95": 700.387302,
+      "max": 2568.534675
+    },
+    {
+      "windowStartSec": 230,
+      "samples": 180000,
+      "p50": 315.994255,
+      "p95": 966.073881,
+      "max": 2484.420343
+    },
+    {
+      "windowStartSec": 240,
+      "samples": 222000,
+      "p50": 262.01389,
+      "p95": 888.225116,
+      "max": 2616.120782
+    },
+    {
+      "windowStartSec": 250,
+      "samples": 240000,
+      "p50": 856.969296,
+      "p95": 2464.320806,
+      "max": 3367.43262
+    },
+    {
+      "windowStartSec": 260,
+      "samples": 225000,
+      "p50": 1396.809012,
+      "p95": 4360.081811,
+      "max": 6061.973411
+    },
+    {
+      "windowStartSec": 270,
+      "samples": 180000,
+      "p50": 266.93209,
+      "p95": 2258.622481,
+      "max": 3763.006329
+    },
+    {
+      "windowStartSec": 280,
+      "samples": 235500,
+      "p50": 199.895209,
+      "p95": 394.349437,
+      "max": 884.517593
+    },
+    {
+      "windowStartSec": 290,
+      "samples": 220000,
+      "p50": 202.971862,
+      "p95": 508.366643,
+      "max": 1405.49904
+    },
+    {
+      "windowStartSec": 300,
+      "samples": 224000,
+      "p50": 204.225088,
+      "p95": 811.092297,
+      "max": 1922.761016
+    },
+    {
+      "windowStartSec": 310,
+      "samples": 220000,
+      "p50": 244.125217,
+      "p95": 496.830412,
+      "max": 1062.317647
+    },
+    {
+      "windowStartSec": 320,
+      "samples": 230000,
+      "p50": 234.102223,
+      "p95": 818.88162,
+      "max": 2800.80704
+    }
+  ],
+  "worstRecipientsP95": [
+    {
+      "recipientIdx": 55,
+      "samples": 13595,
+      "p95": 3822.028722
+    },
+    {
+      "recipientIdx": 246,
+      "samples": 13595,
+      "p95": 3820.098321
+    },
+    {
+      "recipientIdx": 422,
+      "samples": 13595,
+      "p95": 3818.246411
+    },
+    {
+      "recipientIdx": 469,
+      "samples": 13595,
+      "p95": 3805.766354
+    },
+    {
+      "recipientIdx": 146,
+      "samples": 13595,
+      "p95": 3797.421644
+    },
+    {
+      "recipientIdx": 429,
+      "samples": 13595,
+      "p95": 3797.302769
+    },
+    {
+      "recipientIdx": 324,
+      "samples": 13595,
+      "p95": 3797.290084
+    },
+    {
+      "recipientIdx": 286,
+      "samples": 13595,
+      "p95": 3788.933443
+    },
+    {
+      "recipientIdx": 339,
+      "samples": 13595,
+      "p95": 3788.021137
+    },
+    {
+      "recipientIdx": 94,
+      "samples": 13595,
+      "p95": 3782.739244
+    }
+  ],
+  "bestRecipientsP95": [
+    {
+      "recipientIdx": 38,
+      "samples": 13595,
+      "p95": 695.345832
+    },
+    {
+      "recipientIdx": 105,
+      "samples": 13595,
+      "p95": 707.028035
+    },
+    {
+      "recipientIdx": 276,
+      "samples": 13595,
+      "p95": 707.203485
+    },
+    {
+      "recipientIdx": 78,
+      "samples": 13595,
+      "p95": 709.402897
+    },
+    {
+      "recipientIdx": 462,
+      "samples": 13595,
+      "p95": 715.014867
+    },
+    {
+      "recipientIdx": 457,
+      "samples": 13595,
+      "p95": 719.281182
+    },
+    {
+      "recipientIdx": 364,
+      "samples": 13595,
+      "p95": 719.842079
+    },
+    {
+      "recipientIdx": 231,
+      "samples": 13595,
+      "p95": 722.926475
+    },
+    {
+      "recipientIdx": 374,
+      "samples": 13595,
+      "p95": 728.259758
+    },
+    {
+      "recipientIdx": 413,
+      "samples": 13595,
+      "p95": 729.159365
+    }
+  ]
+}

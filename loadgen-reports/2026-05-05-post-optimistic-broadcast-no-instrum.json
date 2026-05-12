@@ -1,0 +1,325 @@
+{
+  "config": {
+    "BASE_URL": "https://group1.cse356.compas.cs.stonybrook.edu",
+    "NUM_RECIPIENTS": 500,
+    "NUM_SENDERS": 20,
+    "MSGS_PER_SEC": 50,
+    "DURATION_SEC": 240,
+    "RAMP_SEC": 20,
+    "COOLDOWN_SEC": 20
+  },
+  "run": {
+    "startedAt": "2026-05-06T00:34:30.673Z",
+    "finishedAt": "2026-05-06T00:39:36.724Z",
+    "durationSec": 306.051,
+    "communityId": "dc8a28f8-78a5-4f2d-9d47-0109b1eb6863",
+    "channelId": "9873e03a-1d56-4079-906c-eb7c6d2bc5bb"
+  },
+  "counters": {
+    "messagesPosted": 11644,
+    "messagesPostFailed": 0,
+    "samples": 5822000,
+    "outOfOrderReceives": 0,
+    "selfReceives": 0,
+    "stillPending": 11644
+  },
+  "latencyMs": {
+    "count": 5822000,
+    "min": 11.031252,
+    "p50": 120.750166,
+    "p90": 241.171929,
+    "p95": 304.546688,
+    "p99": 464.609718,
+    "p999": 1241.331,
+    "max": 5789.068351,
+    "mean": 142.02435392637747
+  },
+  "timelineP95": [
+    {
+      "windowStartSec": 0,
+      "samples": 34500,
+      "p50": 168.160085,
+      "p95": 450.606559,
+      "max": 713.505264
+    },
+    {
+      "windowStartSec": 10,
+      "samples": 173000,
+      "p50": 103.961018,
+      "p95": 218.892742,
+      "max": 1272.928138
+    },
+    {
+      "windowStartSec": 20,
+      "samples": 239500,
+      "p50": 104.042484,
+      "p95": 205.391584,
+      "max": 653.767852
+    },
+    {
+      "windowStartSec": 30,
+      "samples": 241500,
+      "p50": 107.989828,
+      "p95": 250.550345,
+      "max": 872.861739
+    },
+    {
+      "windowStartSec": 40,
+      "samples": 231500,
+      "p50": 118.255649,
+      "p95": 283.94785,
+      "max": 890.921835
+    },
+    {
+      "windowStartSec": 50,
+      "samples": 232500,
+      "p50": 137.792231,
+      "p95": 309.278151,
+      "max": 5789.068351
+    },
+    {
+      "windowStartSec": 60,
+      "samples": 231000,
+      "p50": 126.382737,
+      "p95": 250.583332,
+      "max": 712.96548
+    },
+    {
+      "windowStartSec": 70,
+      "samples": 235000,
+      "p50": 130.572559,
+      "p95": 316.657156,
+      "max": 1218.374834
+    },
+    {
+      "windowStartSec": 80,
+      "samples": 230000,
+      "p50": 135.089,
+      "p95": 342.984264,
+      "max": 928.09207
+    },
+    {
+      "windowStartSec": 90,
+      "samples": 224500,
+      "p50": 112.140592,
+      "p95": 235.351484,
+      "max": 678.525091
+    },
+    {
+      "windowStartSec": 100,
+      "samples": 249500,
+      "p50": 120.05667,
+      "p95": 260.609099,
+      "max": 1478.654608
+    },
+    {
+      "windowStartSec": 110,
+      "samples": 241000,
+      "p50": 90.915385,
+      "p95": 203.472021,
+      "max": 797.924426
+    },
+    {
+      "windowStartSec": 120,
+      "samples": 244500,
+      "p50": 87.093813,
+      "p95": 200.80568,
+      "max": 615.098385
+    },
+    {
+      "windowStartSec": 130,
+      "samples": 232500,
+      "p50": 128.259259,
+      "p95": 301.440384,
+      "max": 964.419207
+    },
+    {
+      "windowStartSec": 140,
+      "samples": 246500,
+      "p50": 116.346632,
+      "p95": 279.353555,
+      "max": 819.124633
+    },
+    {
+      "windowStartSec": 150,
+      "samples": 233500,
+      "p50": 114.428812,
+      "p95": 266.066713,
+      "max": 1737.848134
+    },
+    {
+      "windowStartSec": 160,
+      "samples": 233000,
+      "p50": 102.957895,
+      "p95": 290.140358,
+      "max": 909.814425
+    },
+    {
+      "windowStartSec": 170,
+      "samples": 230000,
+      "p50": 122.598704,
+      "p95": 388.799348,
+      "max": 1942.153922
+    },
+    {
+      "windowStartSec": 180,
+      "samples": 239000,
+      "p50": 139.584882,
+      "p95": 295.466892,
+      "max": 924.719163
+    },
+    {
+      "windowStartSec": 190,
+      "samples": 230500,
+      "p50": 131.261602,
+      "p95": 326.718677,
+      "max": 1339.790066
+    },
+    {
+      "windowStartSec": 200,
+      "samples": 237000,
+      "p50": 175.396892,
+      "p95": 353.280106,
+      "max": 1342.965013
+    },
+    {
+      "windowStartSec": 210,
+      "samples": 230000,
+      "p50": 156.058159,
+      "p95": 344.924573,
+      "max": 903.987843
+    },
+    {
+      "windowStartSec": 220,
+      "samples": 230000,
+      "p50": 110.039136,
+      "p95": 237.418217,
+      "max": 518.849469
+    },
+    {
+      "windowStartSec": 230,
+      "samples": 234500,
+      "p50": 113.916635,
+      "p95": 235.924265,
+      "max": 1051.119956
+    },
+    {
+      "windowStartSec": 240,
+      "samples": 209000,
+      "p50": 144.158406,
+      "p95": 433.813414,
+      "max": 1698.315274
+    },
+    {
+      "windowStartSec": 250,
+      "samples": 228500,
+      "p50": 159.64348,
+      "p95": 351.511794,
+      "max": 1369.148228
+    }
+  ],
+  "worstRecipientsP95": [
+    {
+      "recipientIdx": 259,
+      "samples": 11644,
+      "p95": 342.421246
+    },
+    {
+      "recipientIdx": 22,
+      "samples": 11644,
+      "p95": 339.226765
+    },
+    {
+      "recipientIdx": 196,
+      "samples": 11644,
+      "p95": 335.519606
+    },
+    {
+      "recipientIdx": 123,
+      "samples": 11644,
+      "p95": 333.66685
+    },
+    {
+      "recipientIdx": 447,
+      "samples": 11644,
+      "p95": 333.526314
+    },
+    {
+      "recipientIdx": 174,
+      "samples": 11644,
+      "p95": 333.335785
+    },
+    {
+      "recipientIdx": 90,
+      "samples": 11644,
+      "p95": 332.610512
+    },
+    {
+      "recipientIdx": 353,
+      "samples": 11644,
+      "p95": 331.709452
+    },
+    {
+      "recipientIdx": 238,
+      "samples": 11644,
+      "p95": 331.664197
+    },
+    {
+      "recipientIdx": 495,
+      "samples": 11644,
+      "p95": 331.01112
+    }
+  ],
+  "bestRecipientsP95": [
+    {
+      "recipientIdx": 416,
+      "samples": 11644,
+      "p95": 267.374725
+    },
+    {
+      "recipientIdx": 5,
+      "samples": 11644,
+      "p95": 272.13538
+    },
+    {
+      "recipientIdx": 334,
+      "samples": 11644,
+      "p95": 276.304149
+    },
+    {
+      "recipientIdx": 18,
+      "samples": 11644,
+      "p95": 277.473063
+    },
+    {
+      "recipientIdx": 35,
+      "samples": 11644,
+      "p95": 278.259268
+    },
+    {
+      "recipientIdx": 114,
+      "samples": 11644,
+      "p95": 278.384247
+    },
+    {
+      "recipientIdx": 98,
+      "samples": 11644,
+      "p95": 279.381263
+    },
+    {
+      "recipientIdx": 155,
+      "samples": 11644,
+      "p95": 280.125397
+    },
+    {
+      "recipientIdx": 356,
+      "samples": 11644,
+      "p95": 280.917274
+    },
+    {
+      "recipientIdx": 434,
+      "samples": 11644,
+      "p95": 281.806837
+    }
+  ]
+}

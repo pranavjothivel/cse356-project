@@ -1,0 +1,79 @@
+[setup] Provisioning 520 users (batch=20)...
+  provisioned 20/520  provisioned 40/520  provisioned 60/520  provisioned 80/520  provisioned 100/520  provisioned 120/520  provisioned 140/520  provisioned 160/520  provisioned 180/520  provisioned 200/520  provisioned 220/520  provisioned 240/520  provisioned 260/520  provisioned 280/520  provisioned 300/520  provisioned 320/520  provisioned 340/520  provisioned 360/520  provisioned 380/520  provisioned 400/520  provisioned 420/520  provisioned 440/520  provisioned 460/520  provisioned 480/520  provisioned 500/520  provisioned 520/520
+[setup] Provisioned 520 users
+[setup] Creating community "loadgen-1778027670673" + channel "loadgen-channel"...
+[setup] Joining 519 members to community...
+  joined 20/519  joined 40/519  joined 60/519  joined 80/519  joined 100/519  joined 120/519  joined 140/519  joined 160/519  joined 180/519  joined 200/519  joined 220/519  joined 240/519  joined 260/519  joined 280/519  joined 300/519  joined 320/519  joined 340/519  joined 360/519  joined 380/519  joined 400/519  joined 420/519  joined 440/519  joined 460/519  joined 480/519  joined 500/519  joined 519/519
+[setup] All members joined
+[setup] Enabling realtime for 500 clients...
+  realtime 20/500  realtime 40/500  realtime 60/500  realtime 80/500  realtime 100/500  realtime 120/500  realtime 140/500  realtime 160/500  realtime 180/500  realtime 200/500  realtime 220/500  realtime 240/500  realtime 260/500  realtime 280/500  realtime 300/500  realtime 320/500  realtime 340/500  realtime 360/500  realtime 380/500  realtime 400/500  realtime 420/500  realtime 440/500  realtime 460/500  realtime 480/500  realtime 500/500
+[setup] Realtime enabled
+[setup] 500/500 WS connections healthy
+[run] Starting send loop: 50 msg/s, ramp=20s, steady=240s, 20 senders -> 500 recipients
+[run] t=5.0s  posted=20  failed=0  samples=10000  recent_p95=690ms  pending=20
+[run] t=10.0s  posted=64  failed=0  samples=30580  recent_p95=364ms  pending=69
+[run] t=15.1s  posted=214  failed=0  samples=108074  recent_p95=205ms  pending=220
+[run] t=20.1s  posted=413  failed=0  samples=206660  recent_p95=199ms  pending=420
+[run] t=25.1s  posted=654  failed=0  samples=325237  recent_p95=543ms  pending=655
+[run] t=30.1s  posted=895  failed=0  samples=447315  recent_p95=135ms  pending=897
+[run] t=35.1s  posted=1131  failed=0  samples=566303  recent_p95=347ms  pending=1137
+[run] t=40.1s  posted=1382  failed=0  samples=689911  recent_p95=135ms  pending=1385
+[run] t=45.1s  posted=1605  failed=0  samples=802500  recent_p95=202ms  pending=1605
+[run] t=50.2s  posted=1845  failed=0  samples=922199  recent_p95=158ms  pending=1845
+[run] t=55.3s  posted=2071  failed=0  samples=1035475  recent_p95=456ms  pending=2077
+[run] t=60.3s  posted=2316  failed=0  samples=1155275  recent_p95=98ms  pending=2317
+[run] t=65.3s  posted=2545  failed=0  samples=1272466  recent_p95=174ms  pending=2545
+[run] t=70.3s  posted=2777  failed=0  samples=1388073  recent_p95=230ms  pending=2787
+[run] t=75.3s  posted=3011  failed=0  samples=1504109  recent_p95=298ms  pending=3017
+[run] t=80.3s  posted=3244  failed=0  samples=1620876  recent_p95=123ms  pending=3247
+[run] t=85.4s  posted=3478  failed=0  samples=1738500  recent_p95=214ms  pending=3485
+[run] t=90.5s  posted=3717  failed=0  samples=1858026  recent_p95=170ms  pending=3717
+[run] t=95.5s  posted=3945  failed=0  samples=1972497  recent_p95=162ms  pending=3957
+[run] t=100.5s  posted=4183  failed=0  samples=2084605  recent_p95=92ms  pending=4186
+[run] t=105.5s  posted=4420  failed=0  samples=2210418  recent_p95=255ms  pending=4426
+[run] t=110.5s  posted=4665  failed=0  samples=2332716  recent_p95=95ms  pending=4678
+[run] t=115.6s  posted=4916  failed=0  samples=2457840  recent_p95=273ms  pending=4916
+[run] t=120.6s  posted=5152  failed=0  samples=2575606  recent_p95=120ms  pending=5156
+[run] t=125.6s  posted=5401  failed=0  samples=2699833  recent_p95=59ms  pending=5405
+[run] t=130.6s  posted=5645  failed=0  samples=2821639  recent_p95=50ms  pending=5645
+[run] t=135.6s  posted=5861  failed=0  samples=2930487  recent_p95=351ms  pending=5861
+[run] t=140.7s  posted=6110  failed=0  samples=3054606  recent_p95=141ms  pending=6121
+[run] t=145.7s  posted=6354  failed=0  samples=3177000  recent_p95=198ms  pending=6361
+[run] t=150.7s  posted=6594  failed=0  samples=3297000  recent_p95=211ms  pending=6601
+[run] t=155.7s  posted=6832  failed=0  samples=3414594  recent_p95=253ms  pending=6834
+[run] t=160.7s  posted=7061  failed=0  samples=3530442  recent_p95=260ms  pending=7067
+[run] t=165.7s  posted=7307  failed=0  samples=3653483  recent_p95=108ms  pending=7307
+[run] t=170.7s  posted=7540  failed=0  samples=3769319  recent_p95=374ms  pending=7540
+[run] t=175.8s  posted=7776  failed=0  samples=3888447  recent_p95=236ms  pending=7780
+[run] t=180.9s  posted=8006  failed=0  samples=4002876  recent_p95=250ms  pending=8007
+[run] t=185.9s  posted=8246  failed=0  samples=4122991  recent_p95=221ms  pending=8248
+[run] t=190.9s  posted=8485  failed=0  samples=4241985  recent_p95=143ms  pending=8497
+[run] t=196.0s  posted=8721  failed=0  samples=4360748  recent_p95=79ms  pending=8725
+[run] t=201.1s  posted=8940  failed=0  samples=4470409  recent_p95=472ms  pending=8960
+[run] t=206.1s  posted=9187  failed=0  samples=4591323  recent_p95=66ms  pending=9197
+[run] t=211.1s  posted=9419  failed=0  samples=4709127  recent_p95=355ms  pending=9420
+[run] t=216.2s  posted=9656  failed=0  samples=4828556  recent_p95=342ms  pending=9660
+[run] t=221.2s  posted=9896  failed=0  samples=4947847  recent_p95=316ms  pending=9900
+[run] t=226.2s  posted=10125  failed=0  samples=5060446  recent_p95=170ms  pending=10128
+[run] t=231.3s  posted=10358  failed=0  samples=5178502  recent_p95=184ms  pending=10360
+[run] t=236.3s  posted=10589  failed=0  samples=5294485  recent_p95=214ms  pending=10600
+[run] t=241.3s  posted=10828  failed=0  samples=5413731  recent_p95=185ms  pending=10829
+[run] t=246.3s  posted=11060  failed=0  samples=5531458  recent_p95=305ms  pending=11067
+[run] t=251.3s  posted=11227  failed=0  samples=5613807  recent_p95=439ms  pending=11247
+[run] t=256.6s  posted=11482  failed=0  samples=5741010  recent_p95=381ms  pending=11484
+[run] Send loop complete. Cooling down 20s for stragglers...
+
+[report] Written to /root/loadgen/loadgen-report-1778027664.json
+
+=== Summary ===
+Samples:         5822000
+Latency p50:     120.8ms
+Latency p95:     304.5ms
+Latency p99:     464.6ms
+Latency max:     5789.1ms
+Latency mean:    142.0ms
+Posts succeeded: 11644
+Posts failed:    0
+Pending at end:  11644 (messages POSTed but not all recipients received)
+
+[shutdown] Disconnecting 520 clients...
