@@ -251,7 +251,7 @@ Every PM2 worker was a monolith: REST handlers, WebSocket server, Redis pub/sub 
 The deploy pipeline injects `WORKER_ROLE` into each node's `.env` based on `ws_only` / `api_only` / `http_only` flags in `infra/nodes.yml`.
 
 ### Effect
-WS event loops no longer pay the cost of heavy REST handlers; REST workers no longer pay the cost of pub/sub fanout deserialization they have no use for. Each role can also be tuned independently (e.g. different PM2 `max_memory_restart`, different GC flags).
+WS event loops no longer pay the cost of heavy REST handlers; REST workers no longer pay the cost of pub/sub fanout deserialization they have no use for. Each role can also be tuned independently (e.g. different PM2 `max_memory_restart`, different V8 GC flags — see the GC-tuning bullet in the cross-cutting section below).
 
 ### Tradeoff / limitation
 - Adds operational complexity: rolling deploys must respect role-based pool membership in HAProxy. The rolling-deploy workflow handles this, but it's a coupling.
@@ -259,12 +259,16 @@ WS event loops no longer pay the cost of heavy REST handlers; REST workers no lo
 
 ---
 
-## Cross-cutting: PM2, kernel limits, vertical / horizontal scaling
+## Cross-cutting: PM2, V8 GC tuning, kernel limits, vertical / horizontal scaling
 
 These weren't single bottlenecks so much as continuous capacity work; summarizing briefly:
 
 - **PM2 cluster mode** — `instances: 'max'` per node so each vCPU runs a worker; coordination via Redis (no shared memory).
-- **`max_memory_restart` 512M → 1024M** in `ecosystem.config.js` — RSS legitimately runs higher than 512M under load (WS connection state + cached members on a hot worker), and the lower limit was triggering PM2 restarts mid-burst.
+- **V8 GC tuning** — `node_args: '--max-semi-space-size=8 --max-old-space-size=384'` in `ecosystem.config.js`. Used heavily during tuning passes to shape GC behavior under the WS broadcast workload:
+  - `--max-semi-space-size=8` halves the young generation from V8's ~16 MB default to 8 MB. The message-send hot path generates a lot of short-lived objects (Redis serialization buffers, `JSON.parse`/`stringify` intermediates, promise closures); a smaller semi-space means scavenges (minor GCs) run roughly twice as often but each pause is roughly half the length — so short-lived garbage gets collected before it can promote to old space, and individual pauses stop being long enough to stall the WS event loop.
+  - `--max-old-space-size=384` caps the old generation at 384 MB, leaving deliberate headroom below the worker memory ceiling. Without the cap, V8 happily grows the heap until it bumps into PM2's `max_memory_restart` and the worker gets killed mid-flight — which on a WS pool worker means dropping every open WS connection it was holding. Capping old-space lets full GCs run *before* PM2 has to kill us.
+  - This tuning was validated by a dedicated load-generator pass (results in [`loadgen-reports/2026-05-05-post-gc-tuning.{json,log}`](../loadgen-reports/)). Different roles could in principle take different GC flags via PM2 cluster groupings; in practice we shipped the same flags fleet-wide.
+- **`max_memory_restart` 512M → 1024M** in `ecosystem.config.js` — RSS legitimately runs higher than 512M under load (WS connection state + cached members on a hot worker), and the lower limit was triggering PM2 restarts mid-burst. With the old-space cap above, full GC fires before this limit ever matters in steady state.
 - **`ulimit -n` raised to 65535** on the deploy user; verified via `/proc/$pid/limits` that PM2 workers actually inherit the limit from systemd (`LimitNOFILE=1048576`).
 - **Vertical resize** — original 2 vCPU / 4 GB clanodes resized to 8 vCPU / 16 GB across the API + WS pools (2026-05-05). LB upgraded to 16 vCPU / 30 GB.
 - **Horizontal growth** — 2 app nodes → 3 → 4 → 7 (3 API + 4 WS after the role split) → 8 (added `api-node-http-01`).
