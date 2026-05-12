@@ -57,11 +57,11 @@ Sessions live in Redis-01, presence lives in Redis-01, and cross-node broadcast 
 
 ### Why per-worker pub/sub channels (instead of one shared `messages` channel)
 
-The original design used a single `messages` channel that every WS worker subscribed to. Every WS worker received every broadcast (including ones with no local recipients) and paid the deserialization cost of ~180 KB payloads. As we scaled out the WS pool, **adding subscribers made publishing strictly more expensive** — the opposite of what we wanted. The per-worker channel scheme (PR #s `d2059f4` / `a82eba6` / `c16280b`) routes each broadcast only to workers that actually hold a recipient socket, so fanout cost scales with active receivers rather than total subscribers.
+The original design used a single `messages` channel that every WS worker subscribed to. Every WS worker received every broadcast (including ones with no local recipients) and paid the deserialization cost of ~180 KB payloads. As we scaled out the WS pool, **adding subscribers made publishing strictly more expensive** — the opposite of what we wanted. The per-worker channel scheme (each worker subscribes to its own channel, the publisher resolves the recipient set against Redis presence and publishes only to the channels of workers that hold those recipients) routes each broadcast only to workers that actually hold a recipient socket, so fanout cost scales with active receivers rather than total subscribers. Rolled out in three passes — subscribe per-worker alongside the legacy channel, switch the publisher to per-worker fanout while still dual-publishing for safety, then drop the legacy channel and the dual-publish shim.
 
 ### Why split `WORKER_ROLE` into `http` / `ws` / `all`
 
-A monolithic worker pays the cost of WS pub/sub deserialization (~180 KB per broadcast) even when it holds zero sockets, and a heavy REST handler can stall the WS event loop on the same worker. The role split (`c4faf80`) pins WS work to dedicated nodes and lets API nodes skip the pub/sub subscriber entirely. The `http`-only role on `api-node-http-01` was the latest step — it doesn't even initialize the WS server, just REST + Express health check.
+A monolithic worker pays the cost of WS pub/sub deserialization (~180 KB per broadcast) even when it holds zero sockets, and a heavy REST handler can stall the WS event loop on the same worker. The role split — driven by a `WORKER_ROLE` env var injected per-node by the deploy pipeline based on `ws_only` / `api_only` / `http_only` flags in `infra/nodes.yml` — pins WS work to dedicated nodes and lets API nodes skip the pub/sub subscriber entirely. The `http`-only role on `api-node-http-01` was the latest step — it doesn't even initialize the WS server, just REST + Express health check.
 
 ### Why PostgreSQL FTS instead of Elasticsearch
 
@@ -80,7 +80,7 @@ Presence is a read-modify-write hash: read the user's presence body, mutate a fi
 
 ### Authentication choices
 
-- **Local accounts** — bcrypt at cost 10 (lowered from default 12 after a load-test showed login latency dominated by hash cost — `8f422b5`).
+- **Local accounts** — bcrypt at cost 10 (lowered from default 12 after a load-test showed login latency was dominated by hash CPU; the drop from 12 → 10 roughly quartered the per-hash cost while remaining safely above bcrypt's minimum-recommended work factor).
 - **OAuth providers** — Google, GitHub, and the course Keycloak via OIDC discovery. Strategies in `server/src/auth/passport.js`.
 - **Multi-provider linking** — `User.providers` is a JSONB array; a user can sign in via any linked provider and end up in the same account. OAuth flows that land on a known email surface a "link or create" page via `req.session.pendingOAuth`.
 - **Per-session logout** — each login is its own session row in Redis-01; logging out of one doesn't affect others.

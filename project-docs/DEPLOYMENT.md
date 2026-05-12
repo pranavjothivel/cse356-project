@@ -65,7 +65,7 @@ All OAuth/OIDC callback URLs use the `/api/auth/...` prefix (HAProxy routes by `
 
 | Variable | Notes |
 |---|---|
-| `AXIOM_TOKEN`, `AXIOM_DATASET`, `SENTRY_DSN` | Currently disabled in production after a perf-vs-value tradeoff (`7149649`); kept in code path for re-enable. |
+| `AXIOM_TOKEN`, `AXIOM_DATASET`, `SENTRY_DSN` | Currently disabled in production after a perf-vs-value tradeoff (the per-request shipping overhead outweighed the value once Grafana Cloud was in place); kept in code path for re-enable. |
 
 A reference `.env` template lives at [`server/.env.example`](../server/.env.example) — sanitized prod structure with placeholder values; every required key is present.
 
@@ -97,7 +97,7 @@ Five workflows live under [`.github/workflows/`](../.github/workflows/). Two run
 | Workflow | Trigger | What it does |
 |---|---|---|
 | [`ci.yml`](../.github/workflows/ci.yml) | Push to any non-`main` branch + PRs targeting `main` | Branch validation. Currently runs the client (Vite) `npm ci` + `npm run build` so a broken SPA fails CI before it can be merged. A server smoke-test job exists in the file but is commented out (OIDC discovery against the course Keycloak realm hangs in the CI runner; the smoke-tests/ Jest suite covers post-deploy verification instead). |
-| [`deploy.yml`](../.github/workflows/deploy.yml) | `workflow_dispatch` (auto-deploy on push to `main` was disabled in `e11e6ab` to keep prod stable during the term window) | Full parallel deploy of every app node + the LB. Five jobs (see below). |
+| [`deploy.yml`](../.github/workflows/deploy.yml) | `workflow_dispatch` (auto-deploy on push to `main` was disabled to keep prod stable during the term window — the `on.push` trigger is commented out in the workflow file) | Full parallel deploy of every app node + the LB. Five jobs (see below). |
 | [`rolling-hot-deploy.yml`](../.github/workflows/rolling-hot-deploy.yml) | `workflow_dispatch` with optional `target_node` + `drain_wait` inputs | Same artifact deployment as `deploy.yml`, but node-by-node with HAProxy drain → un-drain bracketing each step. Used when the parallel approach is too aggressive (large code changes, mid-incident hot fixes) or to deploy to one specific node. |
 | [`minio-volume-ci.yml`](../.github/workflows/minio-volume-ci.yml) | Push to any non-`main` branch + PRs targeting `main`, **only** when [`infra/minio-volume.yml`](../infra/minio-volume.yml) changes | Guard rail: validates the new volume size is not a *reduction* against the base branch. Fails the PR if someone accidentally lowers the volume size, since Linode block volumes cannot be shrunk in place. |
 | [`minio-volume-resize.yml`](../.github/workflows/minio-volume-resize.yml) | Push to `main` when [`infra/minio-volume.yml`](../infra/minio-volume.yml) changes | Auto-applies the volume size change. SSHes to the LB (where MinIO's block volume is attached), runs the Linode CLI to resize the volume, then `resize2fs` to grow the filesystem. Pairs with the CI guard above so the size only ever grows. |

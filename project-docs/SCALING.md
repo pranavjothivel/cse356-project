@@ -36,9 +36,9 @@ Multiple coordinated changes, by date:
 
 1. **`server/src/db.js`** — bumped `pool.max` 5 → 20, set `pool.acquire: 15000` (below HAProxy's 50s).
 2. **`POST /api/conversations/:id/read`** — eliminated the duplicate `Channel.findByPk` lookup; ran the two table lookups concurrently when both were needed.
-3. **PgBouncer** (PR #65, `cb82f16`) — added a per-app-node local pooler in transaction mode. App connections multiplex onto a small number of real Postgres connections, removing the `max_connections` ceiling as a constraint.
-4. **`default_pool_size 20 → 50`** (`4bd832b`) — once PgBouncer was stable.
-5. **Dedicated Sequelize pool for search** (`80e4d01` by Pranav Jothivel) — split `server/src/db.js` to export both `sequelize` (main app pool, `max:14`) and `searchSequelize` (dedicated pool, `max:6`) so a heavy FTS query holding a pool slot can never starve the message-send hot path. `server/src/routes/search.js` was migrated to import the search pool. The split also opened the door to per-pool `statement_timeout` tuning.
+3. **PgBouncer** — added a per-app-node local pooler in transaction mode. App connections multiplex onto a small number of real Postgres connections, removing the `max_connections` ceiling as a constraint. Provisioned by a small shell script ([`infra/pgbouncer/provision.sh`](../infra/pgbouncer/provision.sh)) at boot and templated against `.env` on every deploy.
+4. **`default_pool_size 20 → 50`** — once PgBouncer was stable, the per-DB pool size was raised so a single app worker could open more concurrent backend connections without queuing inside PgBouncer.
+5. **Dedicated Sequelize pool for search** (Pranav Jothivel) — split `server/src/db.js` to export both `sequelize` (main app pool, `max:14`) and `searchSequelize` (dedicated pool, `max:6`) so a heavy FTS query holding a pool slot can never starve the message-send hot path. `server/src/routes/search.js` was migrated to import the search pool. The split also opened the door to per-pool `statement_timeout` tuning.
 
 ### Effect
 504s stopped reproducing in our ad-hoc loadgen runs and disappeared from the grading load generator's failure counts. `pool.acquire` time fell from "near-timeout" to sub-millisecond on the steady-state path. The DB pool stopped being a binding constraint for the rest of the project; later bottlenecks were *downstream* of fixed pool capacity, not the pool itself.
@@ -83,9 +83,9 @@ The original boot path called `sequelize.sync({ alter: true })` in production. S
 - INSERT timings on `users` were 4–5× the cost of the same INSERT on a freshly-bootstrapped DB.
 
 ### Fix
-- **Disabled `sync({alter})` in production** (`1c8ab03`); dev still uses it for convenience.
-- **One-off cleanup script** `server/scripts/cleanup-duplicate-user-indexes.js` (`87ec878`, hardened in `bfb5d9e` to drop *constraints* rather than just indexes — Postgres rejects `DROP INDEX` on an index backing a unique constraint).
-- **Manual SQL migration workflow** in `server/scripts/migrations/` for any schema change going forward.
+- **Disabled `sync({alter})` in production**; dev still uses it for convenience. The `start()` bootstrap now calls `sequelize.sync({ alter: process.env.NODE_ENV !== 'production' })`.
+- **One-off cleanup script** at `server/scripts/cleanup-duplicate-user-indexes.js`. Its first version naively issued `DROP INDEX`, which Postgres rejects when the index backs a unique constraint; a follow-up hardened it to `ALTER TABLE … DROP CONSTRAINT` for those cases so the duplicates actually came off.
+- **Manual SQL migration workflow** in `server/scripts/migrations/` for any schema change going forward; see [`server/scripts/migrations/README.md`](../server/scripts/migrations/README.md).
 
 ### Effect
 Per-row INSERT cost dropped back to the baseline (1 unique-index update per column, not N+1). Equally important: future deploys no longer add to the problem.
@@ -108,8 +108,8 @@ The original app shared *one* `redis-server` instance for sessions, cache, prese
 ### Fix
 Two passes:
 
-1. **Split into per-purpose clients** (PR #169 from Chris, `746da2d`): `cacheClient`, `presenceClient`, `lockClient`, plus the existing session client. Each owns its own TCP socket per worker.
-2. **Move cross-node WS pub/sub to a dedicated Redis instance** (`group1-db-redis-02` on `:6380`), via `REDIS_PUBLISH_URL`. The data-side instance (`:6379`) no longer carries fanout traffic at all.
+1. **Split into per-purpose Redis clients** (driven by Chris). `server/src/redis.js` now exports `cacheClient`, `presenceClient`, `lockClient`, and the existing session client as distinct `node-redis` connections. Each owns its own TCP socket per worker, so a long EVALSHA on the mutex client no longer head-of-line-blocks a presence read on a different client.
+2. **Move cross-node WS pub/sub to a dedicated Redis instance** (`group1-db-redis-02` on `:6380`), via the `REDIS_PUBLISH_URL` env var consumed by `server/src/ws.js`. The data-side instance (`:6379`) no longer carries any fanout traffic — it's session/cache/presence/mutex only.
 
 ### Effect
 Each workload now has its own socket; head-of-line wait on one workload no longer back-pressures the others. The split was the largest *structural* lever in the project and unblocked the next round of bottlenecks (which were no longer Redis-side).
@@ -129,12 +129,13 @@ Every `POST /api/messages` publishes a broadcast event onto Redis-02. Every WS-p
 - This is captured in the memory note `feedback_pubsub_subscriber_count_amplifies_publish.md`: more subscribers = more work on the single-threaded Redis.
 
 ### Fix
-Three-pass restructure of WS fanout:
-1. **`d2059f4`** — Subscribe per-worker to its own pub/sub channel (no behavior change yet — both old and new channels carried traffic).
-2. **`a82eba6`** — Route fanout per-worker via presence-aware grouping. Each broadcast now targets only the workers that actually hold the recipient sockets.
-3. **`c16280b`** — Drop the legacy `messages` channel + the dual-publish backward-compat shim. Done.
+Three-pass restructure of WS fanout (each pass shipped as its own deploy so the system was never in a broken intermediate state):
 
-While the per-worker rewrite was being landed, the extra WS nodes were **parked** rather than deleted (`492465d`, `8bac0dc`) — kept in `nodes.yml` commented out so the IPs are recoverable, but skipped by the deploy pipeline.
+1. **Per-worker subscription** — each WS worker subscribes to a per-worker pub/sub channel named after its own identifier in addition to the legacy shared `messages` channel. No behavior change yet — every broadcast was dual-published to both the legacy channel and the appropriate per-worker channels.
+2. **Presence-aware fanout** — `broadcastToUsers` now looks up the recipient set in Redis presence, groups recipients by which worker holds their connection, and publishes to *only* those per-worker channels. The legacy `messages` channel is still published to for safety.
+3. **Drop the legacy channel** — once the per-worker path was confirmed stable, the legacy `messages` channel and the dual-publish shim were removed. Done.
+
+While the per-worker rewrite was being landed, the extra WS nodes that had been provisioned during the earlier capacity scale-out were **parked** rather than deleted — their entries in `infra/nodes.yml` were commented out so the deploy pipeline skipped them, but the IPs remained recoverable in case we wanted to bring them back after the rewrite.
 
 ### Effect
 Per-publish work is now proportional to the number of workers actually holding at least one recipient socket, not to the total subscriber count. This is the only fix in the doc that changes a *complexity class* — the others tune constants.
@@ -156,15 +157,16 @@ Both of these compounded with payload size: bigger payload = more bytes to strin
 
 ### Evidence
 - `commandstats` on Redis-02 showed the per-publish cost stayed elevated even after the per-worker routing landed.
-- Event-loop-lag instrumentation (`0c51f6a`, `520484c`) attributed the residual cost to the broadcast hot path on WS workers, not to publish/subscribe overhead.
+- Event-loop-lag instrumentation (`monitorEventLoopDelay`, gated by `LOG_EL_LAG=1`) on the WS workers attributed the residual cost to the broadcast hot path itself rather than to publish/subscribe overhead.
 - Profiling captures during the 2026-05-05 / 2026-05-06 tuning sessions showed JSON serialization as the dominant cost on hot WS workers.
 
 ### Fix
-Cherry-picked into main as `4a5ce79` "Bring in 5/6-prod app-code optimizations" by Pranav Jothivel:
-- **Pre-stringify broadcast payload once at the publisher** — the payload is serialized exactly once and the resulting buffer is passed to all `deliverLocal` calls and to the cross-node publish.
-- **Skip `deliverLocal` entirely on api-only workers** — they don't hold any sockets, so iterating their `users` Map is pure waste.
-- **Chunk per-user fanout on the subscriber path** — large recipient sets are split into chunks so a single broadcast can't monopolize the event loop.
-- **Coalesce `broadcastPresenceChange` per user with a 250 ms debounce** — multiple rapid presence transitions collapse into one outbound frame instead of N.
+A bundle of WS hot-path optimizations was cherry-picked onto `main` by Pranav Jothivel:
+
+- **Pre-stringify broadcast payload once at the publisher** — instead of letting each `deliverLocal` call run its own `JSON.stringify`, the payload is serialized exactly once and the resulting buffer is passed to every `deliverLocal` and to the cross-node publish. For a recipient set of N local sockets this cuts N serializations down to 1.
+- **Skip `deliverLocal` entirely on api-only workers** — they don't hold any sockets, so iterating their `users` Map per broadcast was pure waste. The worker now early-exits when `WORKER_ROLE === 'http'`.
+- **Chunk per-user fanout on the subscriber path** — large recipient sets are split into chunks so a single broadcast can't monopolize the event loop while iterating thousands of recipients.
+- **Coalesce `broadcastPresenceChange` per user with a 250 ms debounce** — multiple rapid presence transitions for the same user collapse into one outbound frame instead of N.
 
 ### Effect
 Per-broadcast event-loop cost on hot WS workers dropped substantially (visible in `LOG_EL_LAG=1` traces — p99 lag stopped tracking the per-publish rate). API-only nodes stopped showing the spurious deserialization CPU spikes.
@@ -217,15 +219,14 @@ Additionally:
 - e2e delivery p99 was 638 → **1144 ms** under cold-handshake amplification.
 
 ### Fix
-| PR / commit | Change |
-|---|---|
-| `ca4661d` (#171) | `nbthread 4 → 16` to match the resized LB |
-| `c6863bd` (#167) | `maxconn 8192 → 32768` |
-| `41fda35` (#176) | Advertise HTTP/2 via ALPN on `:443` |
-| `1f51cd9` (#174) | `tune.ssl.lifetime 600 → 3600s` |
-| `ba63850` (#178) | Explicit `timeout http-keep-alive 600s` |
-| `d7a63eb` (#46) | Equal `weight 8` on backends (was `2× node1`) |
-| `67e5fc2` | Migrated to a new LB host with BBR + heavy sysctl tune (`infra/lb-sysctl-heavy.conf`) — the original LB was retired in favor of this tuned replacement |
+
+- **`nbthread 4 → 16`** in `infra/haproxy/haproxy.cfg` — match the resized LB host. Without this, HAProxy stayed capped at 4 worker threads regardless of how many cores were available.
+- **`maxconn 8192 → 32768`** on the global section — give headroom above the observed connection peak so the LB never hits the artificial wall under burst.
+- **Advertise HTTP/2 via ALPN** on the `:443` bind — clients that speak h2 multiplex many requests over a single TLS connection, eliminating the per-request handshake jitter that was pushing cold p99 to 1.1 s. Backend stays HTTP/1.1; HAProxy translates between protocols.
+- **`tune.ssl.lifetime 600 → 3600s`** — keep TLS session tickets valid for an hour so returning clients hit the 0-RTT resumption fast path more often, reducing handshake CPU.
+- **Explicit `timeout http-keep-alive 600s`** — keep idle keep-alive connections warm so users with bursty message patterns don't pay a cold handshake on every gap. The fallback was `timeout client 50s`, too short for chat idle.
+- **Equal `weight 8` on backends** — earlier configs gave `node1` 2× weight while it was the only resized node; once all nodes were equal-sized the weights were equalized so `leastconn` could balance purely by current connection count.
+- **Migrated to a new LB host** with BBR + heavy sysctl tune (see [`infra/lb-sysctl-heavy.conf`](../infra/lb-sysctl-heavy.conf)). The original LB was retired in favor of this tuned replacement; the heavy tune covers TCP socket buffers, SYN backlog, TIME_WAIT churn, ephemeral port range, keepalive timers, BBR + `fq` qdisc, and a `vm.swappiness` bump.
 
 ### Effect
 HAProxy CPU dropped from ~80% on 4 threads to ~25% across 16. The maxconn ceiling stopped showing up in stats. ALPN HTTP/2 eliminated the per-request handshake jitter that was pushing cold p99 to 1.1 s.
@@ -238,11 +239,11 @@ HAProxy CPU dropped from ~80% on 4 threads to ~25% across 16. The maxconn ceilin
 Every PM2 worker was a monolith: REST handlers, WebSocket server, Redis pub/sub subscribers all ran in the same event loop. A large GET (`/api/search` returning a few hundred results) would stall the WS event loop on the same worker. Cross-node pub/sub events deserialized in *every* worker — including workers that held no WS connections — wasting CPU on api-only nodes.
 
 ### Evidence
-- Event-loop-lag instrumentation (`0c51f6a`) showed correlated p99 lag spikes between heavy REST handlers and the WS delivery path on the same worker.
-- On nodes that held zero WS connections, the pub/sub subscriber was still deserializing every ~180 KB broadcast.
+- Event-loop-lag instrumentation (`monitorEventLoopDelay`) on workers carrying both REST and WS showed correlated p99 lag spikes between heavy REST handlers and the WS delivery path running on the same event loop.
+- On nodes that held zero WS connections, the pub/sub subscriber was still deserializing every ~180 KB broadcast and iterating an empty `users` Map.
 
 ### Fix
-`WORKER_ROLE` introduced (`c4faf80`, also `4a5ce79`) with three values:
+`WORKER_ROLE` env var introduced with three values:
 - `all` (default) — historical behavior.
 - `ws` — skip API route mounts and only run the WS server. Set on the WS pool nodes.
 - `http` — skip the WS server entirely *and* skip the Redis-02 pub/sub subscriber. Set on `api-node-http-01`; nodes serve REST only.
@@ -263,7 +264,7 @@ WS event loops no longer pay the cost of heavy REST handlers; REST workers no lo
 These weren't single bottlenecks so much as continuous capacity work; summarizing briefly:
 
 - **PM2 cluster mode** — `instances: 'max'` per node so each vCPU runs a worker; coordination via Redis (no shared memory).
-- **`max_memory_restart` 512M → 1024M** (`4172edd`) — RSS legitimately runs higher under load; the lower limit was triggering restarts mid-burst.
+- **`max_memory_restart` 512M → 1024M** in `ecosystem.config.js` — RSS legitimately runs higher than 512M under load (WS connection state + cached members on a hot worker), and the lower limit was triggering PM2 restarts mid-burst.
 - **`ulimit -n` raised to 65535** on the deploy user; verified via `/proc/$pid/limits` that PM2 workers actually inherit the limit from systemd (`LimitNOFILE=1048576`).
 - **Vertical resize** — original 2 vCPU / 4 GB clanodes resized to 8 vCPU / 16 GB across the API + WS pools (2026-05-05). LB upgraded to 16 vCPU / 30 GB.
 - **Horizontal growth** — 2 app nodes → 3 → 4 → 7 (3 API + 4 WS after the role split) → 8 (added `api-node-http-01`).
