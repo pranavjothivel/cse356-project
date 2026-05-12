@@ -68,7 +68,7 @@ The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.3 % L
 | 8 | HAProxy single-thread + tight maxconn | `nbthread 4→16`, `maxconn 8192→32768`, HTTP/2 ALPN, `tune.ssl.lifetime`, plus a mid-term migration to a heavily-tuned LB host (BBR + sysctl tune) | HAProxy CPU 80% → 25%; cold p99 638 → ~400 ms |
 | 9 | Monolith worker (REST + WS on the same event loop) | `WORKER_ROLE` split: `http` / `ws` / `all` per node | WS event loops free of REST stalls; api-only workers skip pub/sub fanout |
 
-The remaining limitations (dual-table FTS, read replica, AOF on Redis-01, integration tests) are listed honestly in the detail doc.
+The remaining limitations (dual-table FTS, read replica, AOF on Redis-01, no autoscaling) and a longer-term roadmap (TS migration, macroservice split, Kubernetes-native) are catalogued in **[project-docs/IMPROVEMENTS.md](project-docs/IMPROVEMENTS.md)**.
 
 **Full analysis with evidence, per-bottleneck Problem → Evidence → Fix → Effect → Tradeoff format: [project-docs/SCALING.md](project-docs/SCALING.md).**
 
@@ -138,5 +138,6 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | Scaling analysis (per-bottleneck) | [project-docs/SCALING.md](project-docs/SCALING.md) |
 | Developer guide | [project-docs/DEVELOPER-GUIDE.md](project-docs/DEVELOPER-GUIDE.md) |
 | Team contributions | [project-docs/TEAM.md](project-docs/TEAM.md) |
+| Improvements & roadmap | [project-docs/IMPROVEMENTS.md](project-docs/IMPROVEMENTS.md) |
 | Infrastructure runbook | [infra/README.md](infra/README.md) |
 | Architecture diagram source | [project-docs/diagrams/architecture.mmd](project-docs/diagrams/architecture.mmd) |

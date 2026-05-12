@@ -275,9 +275,4 @@ These weren't single bottlenecks so much as continuous capacity work; summarizin
 
 ## Limitations that remain
 
-Honest list:
-
-1. **Dual-table FTS.** The GIN-on-write-path pathology is mitigated (`fastupdate=off` bounds the cost) but not architecturally removed. A `message_search` table populated asynchronously after the message-send response would take FTS off the request path entirely. Out of scope for the term but the obvious next step.
-2. **Read replica.** All reads still hit the primary. A read replica for `GET /api/messages` / `GET /api/search` / `GET /api/communities` would roughly double peak rate by freeing primary CPU for writes.
-3. **No formal Redis persistence on `:6379`.** We chose this deliberately (everything is rebuildable from PG), but it means a Redis-01 restart is a brief session-loss event for users. AOF with a lax fsync policy would buy persistence without the BGSAVE stall.
-4. **No autoscaling.** The cluster is hand-scaled. Adding a node is well-documented (`claude-docs/api-node-bootstrap.md`) but requires a human.
+The near-term limitations carried out of this build (dual-table FTS, read replica, AOF on Redis-01, no autoscaling, and a couple of correctness drift items) are catalogued in **[IMPROVEMENTS.md](IMPROVEMENTS.md)** alongside a longer-term roadmap for what a follow-on build would look like (TypeScript migration, monorepo + macroservice split, Kubernetes-native deployment with Blue/Green gating, GitOps CD).

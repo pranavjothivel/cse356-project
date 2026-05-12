@@ -155,8 +155,4 @@ Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was tra
 
 ## Known issues / future improvements
 
-- **Course grading load-generator client / server URL drift**. The generated client (course-side) expects `GET /api/unread`; we exposed `/api/conversations/unread`. The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
-- **Community find-or-create**. Duplicate-name `POST /communities` currently returns 409 + the existing community ID; the outage monitor doesn't handle 409 and keeps reporting failure. Proposed fix: auto-join on duplicate name.
-- **Dual-table FTS** — see [SCALING.md, Bottleneck 2 tradeoff](SCALING.md#bottleneck-2--gin-pending-list-flushes-serializing-inserts). Moving FTS off the write path entirely is the obvious next step beyond `fastupdate=off`.
-- **Read replica** — for `GET /api/messages` / `/api/search` / `/api/communities`. Should roughly double peak rate.
-- **AOF on Redis-01** — we disabled RDB to remove the BGSAVE fork pauses (see [SCALING.md, Bottleneck 7](SCALING.md#bottleneck-7--redis-rdb-bgsave-forks-blocking-the-command-thread)). AOF with `appendfsync everysec` would buy persistence without the fork pause; we just haven't switched.
+The full list of carried-over limitations (correctness drift on a couple of routes, dual-table FTS, read replica, AOF on Redis-01, no autoscaling) plus the longer-term roadmap (TypeScript migration, macroservice split, Kubernetes-native deployment, GitOps CD) lives in **[IMPROVEMENTS.md](IMPROVEMENTS.md)**.
