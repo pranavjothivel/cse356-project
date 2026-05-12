@@ -90,23 +90,31 @@ psql "$DATABASE_URL" -f server/scripts/migrations/0007-baseline-schema.sql
 
 (See [`server/scripts/migrations/README.md`](../server/scripts/migrations/README.md) for the migration workflow.)
 
-## Production deploy
+## CI/CD pipelines
 
-Two pipelines, both in `.github/workflows/`:
+Five workflows live under [`.github/workflows/`](../.github/workflows/). Two run automatically on push/PR; three are triggered by hand via `workflow_dispatch`.
 
-### `deploy.yml` — full deploy on `main` push (currently disabled)
+| Workflow | Trigger | What it does |
+|---|---|---|
+| [`ci.yml`](../.github/workflows/ci.yml) | Push to any non-`main` branch + PRs targeting `main` | Branch validation. Currently runs the client (Vite) `npm ci` + `npm run build` so a broken SPA fails CI before it can be merged. A server smoke-test job exists in the file but is commented out (OIDC discovery against the course Keycloak realm hangs in the CI runner; the smoke-tests/ Jest suite covers post-deploy verification instead). |
+| [`deploy.yml`](../.github/workflows/deploy.yml) | `workflow_dispatch` (auto-deploy on push to `main` was disabled in `e11e6ab` to keep prod stable during the term window) | Full parallel deploy of every app node + the LB. Five jobs (see below). |
+| [`rolling-hot-deploy.yml`](../.github/workflows/rolling-hot-deploy.yml) | `workflow_dispatch` with optional `target_node` + `drain_wait` inputs | Same artifact deployment as `deploy.yml`, but node-by-node with HAProxy drain → un-drain bracketing each step. Used when the parallel approach is too aggressive (large code changes, mid-incident hot fixes) or to deploy to one specific node. |
+| [`minio-volume-ci.yml`](../.github/workflows/minio-volume-ci.yml) | Push to any non-`main` branch + PRs targeting `main`, **only** when [`infra/minio-volume.yml`](../infra/minio-volume.yml) changes | Guard rail: validates the new volume size is not a *reduction* against the base branch. Fails the PR if someone accidentally lowers the volume size, since Linode block volumes cannot be shrunk in place. |
+| [`minio-volume-resize.yml`](../.github/workflows/minio-volume-resize.yml) | Push to `main` when [`infra/minio-volume.yml`](../infra/minio-volume.yml) changes | Auto-applies the volume size change. SSHes to the LB (where MinIO's block volume is attached), runs the Linode CLI to resize the volume, then `resize2fs` to grow the filesystem. Pairs with the CI guard above so the size only ever grows. |
 
-1. **`setup`** — reads `infra/nodes.yml`, emits the app-node matrix + LB IP.
+### `deploy.yml` — full deploy (jobs)
+
+1. **`setup`** — reads `infra/nodes.yml`, emits the app-node matrix + LB IP + telemetry IP as job outputs.
 2. **`deploy-app`** — fan-out matrix job, one parallel SSH job per app node:
-   - Writes `.env` from `ENV_FILE` secret to `/srv/app/.env`.
+   - Writes `.env` from the `ENV_FILE` secret to `/srv/app/.env`.
    - `rsync server/` → `/srv/app/` (excludes `.env`, `node_modules/`).
    - `rsync infra/pgbouncer/` → `/srv/app/infra/pgbouncer/`, regenerates `pgbouncer.ini` from the template with env vars sourced from `.env`.
    - `npm ci --omit=dev`.
    - `pm2 reload ecosystem.config.js --update-env` — graceful zero-downtime reload.
-3. **`deploy-frontend`** — builds `client/` with Vite, rsyncs `client/dist/` to `root@<lb>:/srv/frontend/dist/`.
-4. **HAProxy / Nginx config** — pushed when `infra/haproxy/` or `infra/nginx/` changes (separate job).
-
-Auto-deploy was disabled on `main` push (`e11e6ab`) to keep prod stable during the term project window; deploys are now triggered via `workflow_dispatch`.
+   - Injects `WORKER_ROLE` per-node based on the `ws_only` / `api_only` / `http_only` flags in `nodes.yml`.
+3. **`deploy-jobs`** — runs background-job scripts under [`jobs/`](../jobs/) (e.g. the periodic orphan-attachment cleanup) — currently a no-op slot the team can wire into.
+4. **`deploy-frontend`** — builds `client/` with Vite (`VITE_BACKEND_URL` injected at build time), rsyncs `client/dist/` to `root@<lb>:/srv/frontend/dist/`.
+5. **`deploy-lb-configs`** — pushes `infra/haproxy/` + `infra/nginx/` to the LB and reloads HAProxy / Nginx via `systemctl reload`. Only runs when those paths changed in the deploy revision.
 
 ### Required GitHub Actions secrets
 
@@ -121,9 +129,18 @@ The structure of `ENV_FILE` mirrors [`server/.env.example`](../server/.env.examp
 
 For local development, no GitHub secrets are involved — copy `server/.env.example` to `server/.env` and fill in dev values directly.
 
-### `rolling-hot-deploy.yml` — node-by-node deploy
+### `rolling-hot-deploy.yml` — node-by-node deploy (jobs)
 
-For situations where the fan-out parallel approach is too aggressive (large code changes, mid-incident hot deploys). Walks each app node in sequence: HAProxy drain → wait for connections to bleed off → rsync + `pm2 reload` → poll PM2 health → un-drain → next node. Configurable retry on SSH flake (5 attempts) and a rollback path on PM2 health failure.
+Same five-job spine as `deploy.yml` (`setup`, `deploy-node`, `deploy-jobs`, `deploy-frontend`, `deploy-lb-configs`), but `deploy-node` walks each app node in sequence instead of fanning out:
+
+1. **Take a rsync backup** of `/srv/app/` on the node into `/tmp/app-backup/` on the runner — used to roll back if PM2 health fails.
+2. **HAProxy drain** the node — sets the backend server to `MAINT` via the admin socket on the LB so existing connections bleed off and no new requests arrive.
+3. **Poll for in-flight connections** to drop to zero (bounded by `drain_wait` input, default 180 s).
+4. **rsync code + pgbouncer config** and run `pm2 reload`, with **5-attempt retry on SSH flake** (`kex_exchange_identification` was flaky on the course cluster).
+5. **Poll PM2 health** for the worker count and `restarts` not to be increasing; on failure, rsync the backup back and `pm2 reload` again.
+6. **HAProxy un-drain** the node, mark as `READY`, then move to the next.
+
+Optional `target_node` input deploys to a single node only (1–4) — useful for testing config changes on one box before fanning out.
 
 ### LB updates
 
