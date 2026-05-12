@@ -18,8 +18,6 @@ These are the items previously listed under "Limitations that remain" in `SCALIN
 
 4. **No autoscaling.** The cluster is hand-scaled. Adding a node is well-documented (`claude-docs/api-node-bootstrap.md`) but requires a human.
 5. **Replace `scripts/setup-node.sh` with Ansible playbooks.** Today's per-node bootstrap is a bash script (deploy-user creation + Node + PM2 install) invoked over SSH per host by the `api-node-bootstrap` runbook. Moving the same steps into an idempotent Ansible playbook would buy dry-run support, ordered multi-host execution, declarative state convergence, and the same code-review surface application changes get. We didn't migrate during the term because the script was already in heavy use across team workflows by the time we had the Ansible context to apply — rewriting it would have cost a sprint that was better spent chasing Live-Period bottlenecks. The longer-term *k3s + Ansible playbook* flow described in the cluster-bootstrap section below is the natural endpoint of this migration; the near-term move is to lift the existing script's logic into a playbook without yet changing what it produces.
-6. **Community find-or-create.** Duplicate-name `POST /api/communities` currently returns `409` + the existing community ID; some clients don't handle `409` and keep reporting failure. Proposed fix: auto-join on duplicate name.
-7. **Load-generator client / server URL drift.** The course-side generated client expects `GET /api/unread` while we exposed `/api/conversations/unread`; `POST /api/channels/:id/read` is called with conversation IDs but the channels handler uses `requireChannelMember`. Server-side aliases / fallbacks would smooth this without requiring the client to be regenerated.
 
 ---
 
