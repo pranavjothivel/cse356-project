@@ -1,0 +1,13 @@
+{
+  "name": "cse356-smoke-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Post-deploy smoke tests for the cse356 messaging system (Jest).",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "ws": "^8.18.0"
+  }
+}
