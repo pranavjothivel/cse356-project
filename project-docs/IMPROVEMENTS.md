@@ -54,6 +54,17 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 - **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
 - **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
 
+#### Language and runtime choice per macroservice
+
+The macroservices only need to agree on the wire protocol (gRPC + protobuf, see below), so each service can pick the runtime that best fits its workload — there's no rule that says everything has to stay Node + Express because the monolith was.
+
+- **`auth`** — keep Node but swap Express for **[Fastify](https://fastify.dev)**. JSON-Schema-validated routes, faster per-request CPU on the framework hot path, and a stricter contract make sense for a high-volume, security-sensitive public endpoint where you actually want to reject malformed input at the door.
+- **`messages-pubsub` and `presence-pubsub`** — **Go**. Goroutine-per-connection is cheap (a few KB per goroutine vs. Node's per-callback closure footprint), the M:N scheduler keeps thousands of idle WS connections off the hot path, and the broadcast-fanout workload maps cleanly onto Go's concurrency primitives (`sync.Map` for the connection registry, buffered channels for per-worker fanout, `context.Context` for deadline propagation).
+- **`messages-coordinator`, `storage`** — Node/TS is fine; async orchestration and DB/cache I/O are what Node excels at. If `storage` ever becomes a write-throughput bottleneck, **Rust** with `sqlx` + `redis-rs` is the cleanest GC-pause-free fallback.
+- **`search`** — driven by the engine's SDK quality; Node or Go both work for Elasticsearch / Meilisearch.
+
+The invariant is the gRPC contract — internal callers don't know or care what language a service is written in. The browser-facing edge stays uniform REST + WS regardless.
+
 #### gRPC for internal macroservice communication
 
 Once the macroservices land, internal hops (`messages-coordinator` → `storage`, `presence-pubsub` → `auth`, etc.) need a wire protocol. **gRPC over HTTP/2** is the right default for internal RPCs:
