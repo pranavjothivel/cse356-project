@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+For additional project context, runbooks, and historical session notes, look in [`claude-docs/`](claude-docs/).
+
 ## Commands
 
 All commands run from `server/`:
@@ -74,4 +76,4 @@ Config files: `infra/haproxy/haproxy.cfg`, `infra/nginx/`, `infra/pgbouncer/`.
 
 ## Key Docs
 
-See `docs/` for detailed documentation: `spec.md` (requirements), `architecture.md` (topology & design), `scaling.md` (bottleneck analysis), `performance-tuning.md` (tuning plan), `incident-2026-04-13-504s.md` (504 post-mortem), `deployment.md` (CI/CD details).
+See `claude-docs/` for detailed documentation: `spec.md` (requirements), `architecture.md` (topology & design), `scaling.md` (bottleneck analysis), `performance-tuning.md` (tuning plan), `incident-2026-04-13-504s.md` (504 post-mortem), `deployment.md` (CI/CD details).

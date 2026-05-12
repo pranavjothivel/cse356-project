@@ -43,7 +43,7 @@ All nodes are Linodes on the CSE356 course cluster.
 
 ## Adding a New API Node
 
-Full runbook: [`docs/api-node-bootstrap.md`](../docs/api-node-bootstrap.md). Covers `scripts/setup-node.sh`, PgBouncer install, Grafana Alloy install + config mirror, the required edits to `nodes.yml`/`haproxy.cfg`/this README, and the deploy/verification steps.
+Full runbook: [`claude-docs/api-node-bootstrap.md`](../claude-docs/api-node-bootstrap.md). Covers `scripts/setup-node.sh`, PgBouncer install, Grafana Alloy install + config mirror, the required edits to `nodes.yml`/`haproxy.cfg`/this README, and the deploy/verification steps.
 
 ## Deploying to both LBs
 
