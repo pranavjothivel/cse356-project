@@ -1,4 +1,4 @@
-# loadgen-reports
+# adhoc-loadgen-reports
 
 Archived outputs from our **ad-hoc loadgen runs** — discrete passes the team kicked off from a developer laptop or the loadgen node against the prod cluster to validate specific fixes (BGSAVE-off baseline, GC tuning, optimistic broadcast variants, TLS-handshake characterization).
 

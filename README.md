@@ -55,7 +55,7 @@ cd smoke-tests && npm install && npm test       # default target = prod LB
 TARGET=http://localhost:3000 npm test           # local dev backend
 ```
 
-Deeper verification: our ad-hoc loadgen runs (archived in [`loadgen-reports/`](loadgen-reports/), indexed in [`loadgen-reports/README.md`](loadgen-reports/README.md) — distinct from the course grading load generator, which runs externally), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
+Deeper verification: our ad-hoc loadgen runs (archived in [`adhoc-loadgen-reports/`](adhoc-loadgen-reports/), indexed in [`adhoc-loadgen-reports/README.md`](adhoc-loadgen-reports/README.md) — distinct from the course grading load generator, which runs externally), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
 
 ## 3. Scaling and Load Handling
 
@@ -118,7 +118,7 @@ infra/
   haproxy/, nginx/, pgbouncer/, lb-sysctl-heavy.conf
 project-docs/           ← public-facing docs (this folder)
 claude-docs/            ← raw session notes (source for project-docs/)
-loadgen-reports/        ← outputs from our ad-hoc loadgen runs + README index
+adhoc-loadgen-reports/        ← outputs from our ad-hoc loadgen runs + README index
                           with per-run p50/p95/p99 comparison
                           (not the course grading load generator)
 scripts/                ← repo-level scripts (e.g. tls-probe)
@@ -153,6 +153,6 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | Developer guide | [project-docs/DEVELOPER-GUIDE.md](project-docs/DEVELOPER-GUIDE.md) |
 | Team contributions | [project-docs/TEAM.md](project-docs/TEAM.md) |
 | Improvements & roadmap | [project-docs/IMPROVEMENTS.md](project-docs/IMPROVEMENTS.md) |
-| Performance results (our ad-hoc loadgen) | [loadgen-reports/README.md](loadgen-reports/README.md) |
+| Performance results (our ad-hoc loadgen) | [adhoc-loadgen-reports/README.md](adhoc-loadgen-reports/README.md) |
 | Infrastructure runbook | [infra/README.md](infra/README.md) |
 | Architecture diagram source | [project-docs/diagrams/architecture.mmd](project-docs/diagrams/architecture.mmd) |
