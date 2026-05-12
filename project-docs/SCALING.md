@@ -169,7 +169,7 @@ A bundle of WS hot-path optimizations was cherry-picked onto `main` by Pranav Jo
 - **Coalesce `broadcastPresenceChange` per user with a 250 ms debounce** — multiple rapid presence transitions for the same user collapse into one outbound frame instead of N.
 
 ### Effect
-Per-broadcast event-loop cost on hot WS workers dropped substantially (visible in `LOG_EL_LAG=1` traces — p99 lag stopped tracking the per-publish rate). API-only nodes stopped showing the spurious deserialization CPU spikes.
+Per-broadcast event-loop cost on hot WS workers dropped substantially (visible in `LOG_EL_LAG=1` traces — p99 lag stopped tracking the per-publish rate). API-only nodes stopped showing the spurious deserialization CPU spikes. End-to-end delivery p95 in our [`2026-05-05-post-optimistic-broadcast-no-instrum`](../loadgen-reports/) run measured **305 ms** at 50 msg/s × 500 recipients, vs. **949 ms** on the same code with the in-app instrumentation hot-patch still enabled (`2026-05-05-post-optimistic-broadcast`) and **2 804 ms** on the run just before the broadcast-publish-before-PG-INSERT change (`2026-05-05-post-gc-tuning`). Full comparison in [`loadgen-reports/README.md`](../loadgen-reports/README.md).
 
 ### Tradeoff / limitation
 The recipient set is now baked into the pre-stringified payload at publish time, so any per-recipient targeting must happen at the publish layer rather than on the receiving worker. We do that already via the per-worker routing (Bottleneck 5), so this fit cleanly — but it does close the door on cheap per-recipient payload customization.
@@ -190,7 +190,7 @@ Redis-01 was running with the default `save 900 1 300 10 60 10000` policy. Under
 Disabled RDB save policy on Redis-01: `CONFIG SET save ""`. Persistence is now turned off for the cache/presence/sessions instance.
 
 ### Effect
-The periodic command-thread stalls disappeared. Per-minute p99 latency artifacts went away.
+The periodic command-thread stalls disappeared. Per-minute p99 latency artifacts went away. Validated with the [`2026-05-05-post-bgsave-off-baseline`](../loadgen-reports/) loadgen run, which became the clean baseline for every subsequent tuning pass (see [`loadgen-reports/README.md`](../loadgen-reports/README.md)).
 
 ### Tradeoff / limitation
 We lose Redis persistence on `:6379`. We *can* afford this — every piece of state on that instance is either:
@@ -215,7 +215,7 @@ Additionally:
 
 ### Evidence
 - HAProxy stats showed concurrent connections approaching the 8192 cap during peak grading-load-generator traffic.
-- TLS-probe CSVs (`loadgen-reports/2026-05-06-tls-probe*.csv`) captured cold-handshake latency in the 600–1100 ms range pre-tuning.
+- TLS-probe CSVs in `loadgen-reports/2026-05-06-tls-probe*.csv` captured cold-handshake latency in the 600–1100 ms range pre-tuning; the variants (`-postfix-hostname`, `-postfix-ip`, `-postrestart-ip`) bracket the effect of the sysctl bumps and the HAProxy restart. See [`loadgen-reports/README.md`](../loadgen-reports/README.md) for the row breakdown.
 - e2e delivery p99 was 638 → **1144 ms** under cold-handshake amplification.
 
 ### Fix
@@ -267,7 +267,7 @@ These weren't single bottlenecks so much as continuous capacity work; summarizin
 - **V8 GC tuning** — `node_args: '--max-semi-space-size=8 --max-old-space-size=384'` in `ecosystem.config.js`. Used heavily during tuning passes to shape GC behavior under the WS broadcast workload:
   - `--max-semi-space-size=8` halves the young generation from V8's ~16 MB default to 8 MB. The message-send hot path generates a lot of short-lived objects (Redis serialization buffers, `JSON.parse`/`stringify` intermediates, promise closures); a smaller semi-space means scavenges (minor GCs) run roughly twice as often but each pause is roughly half the length — so short-lived garbage gets collected before it can promote to old space, and individual pauses stop being long enough to stall the WS event loop.
   - `--max-old-space-size=384` caps the old generation at 384 MB, leaving deliberate headroom below the worker memory ceiling. Without the cap, V8 happily grows the heap until it bumps into PM2's `max_memory_restart` and the worker gets killed mid-flight — which on a WS pool worker means dropping every open WS connection it was holding. Capping old-space lets full GCs run *before* PM2 has to kill us.
-  - This tuning was validated by a dedicated load-generator pass (results in [`loadgen-reports/2026-05-05-post-gc-tuning.{json,log}`](../loadgen-reports/)). Different roles could in principle take different GC flags via PM2 cluster groupings; in practice we shipped the same flags fleet-wide.
+  - This tuning was validated by a dedicated load-generator pass; the JSON / log live at `loadgen-reports/2026-05-05-post-gc-tuning.{json,log}` and the comparison table in [`loadgen-reports/README.md`](../loadgen-reports/README.md) places it against the other tuning passes. Different roles could in principle take different GC flags via PM2 cluster groupings; in practice we shipped the same flags fleet-wide.
 - **`max_memory_restart` 512M → 1024M** in `ecosystem.config.js` — RSS legitimately runs higher than 512M under load (WS connection state + cached members on a hot worker), and the lower limit was triggering PM2 restarts mid-burst. With the old-space cap above, full GC fires before this limit ever matters in steady state.
 - **`ulimit -n` raised to 65535** on the deploy user; verified via `/proc/$pid/limits` that PM2 workers actually inherit the limit from systemd (`LimitNOFILE=1048576`).
 - **Vertical resize** — original 2 vCPU / 4 GB clanodes resized to 8 vCPU / 16 GB across the API + WS pools (2026-05-05). LB upgraded to 16 vCPU / 30 GB.

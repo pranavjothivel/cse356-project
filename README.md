@@ -35,6 +35,8 @@ psql "$DATABASE_URL" -f server/scripts/migrations/0007-baseline-schema.sql
 
 **Production deploy:** GitHub Actions, two pipelines — `deploy.yml` (full parallel deploy on `workflow_dispatch`) and `rolling-hot-deploy.yml` (node-by-node drain → deploy → un-drain). Runbook in [`infra/README.md`](infra/README.md). Detail in **[project-docs/DEPLOYMENT.md](project-docs/DEPLOYMENT.md)**.
 
+**Cloud assumptions:** the production deployment runs on **Linode VMs** with private networking enabled; all app / DB / cache traffic goes over the private network (10.x addresses) and public IPs are SSH-only. The deployment lives behind a single domain (`group1.cse356.compas.cs.stonybrook.edu`) with a Let's Encrypt cert on the LB. No CDN; the SPA bundle is served directly by Nginx on the LB. Nothing in the system is locked to Linode specifically — any VM provider with private networking and an L4 LB would work — but the deploy pipeline and the `infra/nodes.yml` inventory currently assume the Linode topology.
+
 **Running operations (start / stop / status):** PM2 runs the app cluster on each node under the `deploy` user. Common commands:
 ```bash
 sudo -u deploy pm2 list                                  # status
@@ -53,7 +55,7 @@ cd smoke-tests && npm install && npm test       # default target = prod LB
 TARGET=http://localhost:3000 npm test           # local dev backend
 ```
 
-Deeper verification: our ad-hoc loadgen runs (archived in [`loadgen-reports/`](loadgen-reports/) — distinct from the course grading load generator, which runs externally), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
+Deeper verification: our ad-hoc loadgen runs (archived in [`loadgen-reports/`](loadgen-reports/), indexed in [`loadgen-reports/README.md`](loadgen-reports/README.md) — distinct from the course grading load generator, which runs externally), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
 
 ## 3. Scaling and Load Handling
 
@@ -116,7 +118,8 @@ infra/
   haproxy/, nginx/, pgbouncer/, lb-sysctl-heavy.conf
 project-docs/           ← public-facing docs (this folder)
 claude-docs/            ← raw session notes (source for project-docs/)
-loadgen-reports/        ← outputs from our ad-hoc loadgen runs
+loadgen-reports/        ← outputs from our ad-hoc loadgen runs + README index
+                          with per-run p50/p95/p99 comparison
                           (not the course grading load generator)
 scripts/                ← repo-level scripts (e.g. tls-probe)
 smoke-tests/            ← Jest-based post-deploy sanity checks
@@ -150,5 +153,6 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | Developer guide | [project-docs/DEVELOPER-GUIDE.md](project-docs/DEVELOPER-GUIDE.md) |
 | Team contributions | [project-docs/TEAM.md](project-docs/TEAM.md) |
 | Improvements & roadmap | [project-docs/IMPROVEMENTS.md](project-docs/IMPROVEMENTS.md) |
+| Performance results (our ad-hoc loadgen) | [loadgen-reports/README.md](loadgen-reports/README.md) |
 | Infrastructure runbook | [infra/README.md](infra/README.md) |
 | Architecture diagram source | [project-docs/diagrams/architecture.mmd](project-docs/diagrams/architecture.mmd) |
