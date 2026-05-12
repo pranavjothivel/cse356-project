@@ -160,6 +160,61 @@ Three deployment targets for the stateful tier, each with a sensible default:
 
 The choice mirrors the cluster-bootstrap decision in the deployment section: VMs → either dedicated stateful VMs *or* operators if K8s is already in play; managed cloud → managed everything. Mixing dedicated-stateful-VMs *with* self-managed K8s is what we have today and works fine; it just means stateful upgrades stay manual.
 
+#### Snowflake IDs for distributed primary keys
+
+Today every primary key is a Postgres-generated UUID v4. Adequate but suboptimal:
+
+- 16 bytes on disk vs 8 bytes for a 64-bit integer; doubles BTree leaf pressure on the hot tables (`messages`, `attachments`, `read_receipts`).
+- Random ordering destroys insert locality — every INSERT pages a fresh leaf, which under sustained write load shows up as bufferpool churn and index bloat.
+- No way to recover origin from an ID — a stuck or duplicate ID can't be decoded to "service X, replica Y, ms Z" for forensics.
+- Cursor pagination needs a separate `(created_at, id)` composite index because UUIDs aren't time-ordered.
+
+Switching application-generated IDs (messages, attachments, presence events — anything written from `messages-coordinator` / `storage`) to a Snowflake-style 64-bit, time-ordered scheme would buy half the storage, monotonic-per-replica insert order, and decoded-origin debugging — all in one move.
+
+**Proposed bit layout for our use:**
+
+```
+ 1 bit   sign (always 0 — keeps the ID positive for languages that lack u64)
+41 bits  timestamp (ms since a custom epoch, e.g. 2026-01-01 — ~69 years of headroom)
+ 3 bits  service ID (8 services: auth, management, messages-coordinator, messages-pubsub,
+                     presence-pubsub, storage, search, gateway)
+ 7 bits  replica ID within service (128 replicas per service)
+12 bits  sequence within ms (4096 IDs per ms per replica)
+─────────
+64 bits  total
+```
+
+Service IDs are statically assigned in a `service-ids.proto` (or a constants file shared via the monorepo) and **never reused** even after a service retires — that way an old ID encountered later still decodes unambiguously.
+
+**Replica ID assignment** is the load-bearing detail:
+
+- **Best fit: Kubernetes StatefulSet ordinal.** Pods in a StatefulSet get stable identities (`-0`, `-1`, …, `-N`). Inject the ordinal via the DownwardAPI as an env var; the replica ID is then constant across pod restarts with no coordination required. The right shape if the macroservices are deployed as StatefulSets (presence-pubsub and messages-pubsub almost certainly should be, since they hold per-replica state in Redis-01).
+- **Fallback: Redis-backed lease for stateless Deployments.** Each pod calls a Lua script at startup that scans `replica-id:{service}:{0..127}` for a free slot, claims it with a 30 s TTL, and refreshes the TTL every 10 s via a heartbeat. On graceful shutdown the pod releases its slot; if a pod dies hard, the slot frees when the TTL expires and another pod claims it on its next heartbeat tick. Bounded at 128 replicas per service; if we ever need more we re-slice the bits.
+
+**Clock-skew considerations:**
+
+- IDs are *per-replica monotonic* by construction — the 12-bit sequence guarantees no two IDs from the same replica share `(timestamp, sequence)`.
+- Across replicas, NTP-disciplined clocks should hold sub-second skew. Tolerable for cursor ordering at our scale; if it ever bites, switch to chrony with a tighter polling interval.
+- If a replica's clock goes *backwards* (rare; can happen on VM live-migrate or NTP step), the ID generator should **pause until time catches up** rather than emit IDs with a stale timestamp. A few hundred ms of pause-on-rare-event beats hours of sorted-by-time queries getting silently wrong answers.
+
+The migration path is non-disruptive — keep UUID columns as-is on existing rows, add a `bigint id_snowflake` column alongside, dual-write for a release, switch readers, drop the UUID column on a subsequent release. Foreign keys move via the same staged path.
+
+#### Keep WebSocket payload sizes minimal as an ongoing discipline
+
+The system's worst scaling bottleneck (SCALING.md Bottleneck 5) was driven by ~180 KB broadcast payloads, and the work in Bottleneck 6 (pre-stringify, base64 IDs, presence-aware routing) brought us to a workable point but didn't change the underlying principle. **Every byte added to a WS broadcast multiplies by every recipient on every fanout.** The discipline should be permanent.
+
+Concrete moves to keep applying:
+
+- **Send deltas, not full state.** When a message is edited, broadcast `{op:"edit", id, content, editedAt}` — not the full re-serialized message envelope. When read-state advances, broadcast a single message-ID watermark, not the user's full unread bitmap.
+- **Drop fields the client doesn't need.** The current broadcast envelope still carries server-side bookkeeping (publishedAt, source-worker-id, debug fields). Each one removed is `bytes × recipients` off the wire and `bytes × recipients` off every WS-worker deserialization. Audit it periodically.
+- **Binary encoding on the broadcast channels** (REST stays JSON for debuggability). Switching the cross-node pub/sub payload from JSON to **`msgpack`** or **protobuf** is typically a 35–45 % size reduction with no algorithmic change; for a 180 KB JSON envelope that's ~70 KB shaved.
+- **`permessage-deflate` on the WS frames.** Supported by every modern browser. Chat content compresses well (lots of repeated user IDs, channel IDs, member lists in fanout envelopes). Costs publisher CPU; offsets wire bytes and per-recipient bandwidth — a clear net win at our recipient fan-out ratios.
+- **Snowflake IDs** (above) — 8-byte wire integers vs 36-char UUID-hex strings, multiplied by every recipient ID listed in a broadcast envelope, adds up quickly. Direct compounding with the binary-encoding bullet.
+- **Don't broadcast what the client could lazily fetch.** For non-real-time-critical events, the pattern *"broadcast a tiny `{event:'channel-updated', channelId}` → client fetches the body only if the channel is in view"* is often cheaper than always sending the full body to every recipient. Tradeoff: a latency budget for the lazy fetch on the receiving side.
+- **CI guard.** A unit test that snapshots the broadcast envelope's serialized size against a threshold catches regressions before they fan out to thousands of recipients in prod. Easy to add; cheap to maintain.
+
+The wins compound. A 30 % reduction in payload size at constant fanout count is simultaneously a 30 % drop in Redis-02 throughput, a 30 % drop in WS-worker deserialize CPU, *and* a 30 % drop in per-recipient wire bytes — three layers of savings off one change.
+
 #### Queuing techniques worth considering
 
 - **Per-recipient ordered queues** for fanout — guarantees in-order delivery per channel without forcing a single global order.
