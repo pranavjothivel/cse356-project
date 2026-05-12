@@ -2,7 +2,7 @@
 ## Cloud Hosted Real-time Messenging App (Discord-like)
 ### Authors: Pranav Jothivel, Christopher Brinker, Jacky Chen, and Zach Decena
 
-**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, **~98.3 %** uptime across the 4-week project window (10.7 h cumulative downtime over 624 h).
+**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, **~98.3 %** uptime across the **Live Period** (4/13 → 5/8, 10.7 h cumulative downtime over 624 h).
 
 ---
 
@@ -54,7 +54,7 @@ Deeper verification: our ad-hoc loadgen runs (archived in [`loadgen-reports/`](l
 
 ## 3. Scaling and Load Handling
 
-The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.3 % uptime across 4 weeks** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
+The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.3 % Live-Period uptime** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
 
 | # | Bottleneck | Fix | Effect |
 |---|---|---|---|
@@ -123,7 +123,7 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | **Jacky Chen** | Authentication (local + OAuth), search, attachment system, message-send hot path, HAProxy CPU tuning |
 | **Zach Decena** | Direct conversations (DMs + group DMs), messaging/presence optimization, issue tracking, vertical + horizontal node scaling |
 
-**Communication & process** — primary channel is the team Discord, with **Sentry** (unhandled exceptions thrown by app workers, with stack trace and request context), **Grafana Cloud** (Loki logs + Prometheus metrics), and **Axiom** (HAProxy access-log tail) alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. The hard deadline was **4/13 "Go Live"**, after which the **course grading load generator** simulated real end-users continuously for the 4-week Test Traffic Period. We finished the majority of feature work well before Go Live so the team could spend the rest of the window catching bugs that the pre-Live API tests didn't reveal under real-world traffic patterns; "what's the binding constraint right now" framed each new round of work.
+**Communication & process** — primary channel is the team Discord, with **Sentry** (unhandled exceptions thrown by app workers, with stack trace and request context), **Grafana Cloud** (Loki logs + Prometheus metrics), and **Axiom** (HAProxy access-log tail) alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered — or whoever could look at the issue ASAP) rather than top-down assigned. The course timeline had two phases: **pre-4/13** was API Tests + a small-scale **Test Traffic Period** (load-generator traffic was opt-in, gated on 100% API Tests passing), and **4/13 → 5/8** was the **Live Period** — the same course grading load generator shape as Test Traffic but at much greater scale. We finished the majority of feature work before 4/13 so the Live Period could be spent chasing bugs that didn't surface at Test Traffic volume; "what's the binding constraint right now" framed each new round of work.
 
 **Full per-member contribution detail with commit citations: [project-docs/TEAM.md](project-docs/TEAM.md).**
 

@@ -117,7 +117,7 @@ The verification surface, lightest to heaviest:
   ```
 
 - **Manual smoke** — open the SPA at `https://group1.cse356.compas.cs.stonybrook.edu`, log in, send a message in a community and a DM. Check the per-component sections of [SCALING.md](SCALING.md) for the regression risks that have bitten us before.
-- **Our ad-hoc loadgen runs** — headless API-driven clients we drove against the cluster during tuning to validate specific fixes (different mechanism from the **course grading load generator**, which is course-run, ran continuously through the Test Traffic Period, and which we did not control). Both kinds of clients hit the same REST + WS surface. Reports from our runs archived under `loadgen-reports/`; filename convention `2026-MM-DD-<scope>-<state>.{json,log}` — the JSON is the run summary, the `.log` has per-request traces.
+- **Our ad-hoc loadgen runs** — headless API-driven clients we drove against the cluster during tuning to validate specific fixes (different mechanism from the **course grading load generator**, which is course-run — small scale through the pre-4/13 Test Traffic Period, much greater scale through the 4/13 → 5/8 Live Period — and which we did not control). Both kinds of clients hit the same REST + WS surface. Reports from our runs archived under `loadgen-reports/`; filename convention `2026-MM-DD-<scope>-<state>.{json,log}` — the JSON is the run summary, the `.log` has per-request traces.
 - **TLS-probe** — `scripts/tls-probe/tls-probe.sh` measures cold-handshake latency at the LB; useful to isolate LB-side jitter from app-side cost.
 - **PM2 health** — `sudo -u deploy pm2 jlist | jq` after a deploy; rising `restarts` is a smell.
 - **HAProxy stats** — `:8404/stats` on either LB. Backend column color = health.

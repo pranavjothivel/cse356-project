@@ -2,7 +2,7 @@
 
 ## Headline result
 
-| Peak concurrent connections | Peak message rate | Uptime over 4-week project window |
+| Peak concurrent connections | Peak message rate | Uptime over the Live Period (4/13 → 5/8) |
 |---|---|---|
 | **3.3K** | **218.0 / s** | **~98.3 %** (10.7 h cumulative downtime across 624 h) |
 
@@ -12,7 +12,7 @@ These are the final numbers for `group1`. The remainder of this document walks t
 
 Two distinct sources of load drove the system, and this document refers to them with deliberately different names so they're not conflated:
 
-- **Course grading load generator** — the course-run infrastructure (out of our control) that connected headless API-driven clients to our deployment and ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. After 4/13 "Go Live" it ran continuously for the 4-week **Test Traffic Period**, simulating real end-users. Peak Conn and Peak Rate in the headline are therefore *demand-side* numbers — the grading load generator kept pushing until something broke; reducing failure rates directly raised both ceilings.
+- **Course grading load generator** — the course-run infrastructure (out of our control) that connected headless API-driven clients to our deployment and ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. Ran at small scale during the pre-4/13 **Test Traffic Period** (opt-in, gated on 100% API Tests passing) and then at much greater scale during the **4/13 → 5/8 Live Period**, simulating real end-users. Peak Conn and Peak Rate in the headline are therefore *demand-side* numbers from the Live Period — the grading load generator kept pushing until something broke; reducing failure rates directly raised both ceilings.
 - **Our ad-hoc loadgen runs** — discrete test passes the team kicked off from a developer laptop / the loadgen node against the prod cluster to validate specific fixes (BGSAVE-off baseline, GC tuning, optimistic broadcast variants, etc.). Outputs archived in [`loadgen-reports/`](../loadgen-reports/) — JSON run summaries paired with `.log` files containing per-request traces. These are *our* runs; the grading load generator's traffic is not captured here.
 - **Telemetry stack**: Grafana Alloy on every node and on a dedicated `group1-telemetry-01` collector, shipping logs + metrics to **Grafana Cloud** (Loki for logs, Mimir/Prometheus for metrics, hosted Grafana dashboards). HAProxy stats endpoint (`/stats`) for live LB state, Sentry for unhandled exceptions, **Axiom for HAProxy live log streaming** (per-request access logs piped via Vector for ad-hoc tail/aggregation during incidents). Inline `console.log` traces during deep-dive incident investigations.
 - **TLS-probe CSVs** in `loadgen-reports/2026-05-06-tls-probe*.csv` (script in [`scripts/tls-probe/`](../scripts/tls-probe/)) — used to characterize LB-side cold-handshake latency separately from app-side cost.
