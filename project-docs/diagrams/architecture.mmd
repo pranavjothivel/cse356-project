@@ -14,7 +14,7 @@ flowchart TB
         APIHTTP["group1-api-node-http-01"]
     end
 
-    subgraph WS["WS pool — WORKER_ROLE=ws, uWebSockets.js :3001"]
+    subgraph WS["WS pool — WORKER_ROLE=ws, node ws library on :3000"]
         direction LR
         WS04["group1-api-node-04"]
         WS05["group1-api-node-05"]
