@@ -18,6 +18,13 @@ app_nodes:
     type: 8vcpu-16gb
     # Resized 2026-05-05 from 2vcpu-4gb. All 3 API nodes are now uniform.
     api_only: true
+  - name: group1-api-node-http-01
+    ip: 130.245.136.221
+    private_ip: 10.0.1.119
+    type: 8vcpu-16gb
+    # Added to increase HTTP API worker capacity. No WS role; WORKER_ROLE=http
+    # skips WS init, so this node never appears in app_ws_servers.
+    api_only: true
   # Original 4-node WS pool (04/05/06/07) — REMOVED from rotation 2026-05-08
   # during the uWebSockets.js rewrite. These nodes run Ubuntu 22.04 (glibc
   # 2.35) and the uws prebuilt binary is built against newer glibc; they

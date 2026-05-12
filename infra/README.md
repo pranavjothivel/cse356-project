@@ -9,6 +9,7 @@ All nodes are Linodes on the CSE356 course cluster.
 | `group1-api-node-01` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.217` | `10.0.3.93` |
 | `group1-api-node-02` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.149` | `10.0.1.121` |
 | `group1-api-node-03` | API-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.239` | `10.0.0.177` |
+| `group1-api-node-http-01` | HTTP-only API app node (PM2 / Node.js, `WORKER_ROLE=http`) | Clanode 16G | `130.245.136.221` | `10.0.1.119` |
 | `group1-api-node-04` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.223` | `10.0.3.44` |
 | `group1-api-node-04b` | WS-only app node (PM2 / Node.js, Ubuntu 24.04) | Clanode 16G | `130.245.136.230` | `10.0.2.240` |
 | `group1-api-node-05` | WS-only app node (PM2 / Node.js) | Clanode 16G | `130.245.136.72` | `10.0.3.79` |
