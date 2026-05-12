@@ -54,6 +54,19 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 - **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
 - **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
 
+#### Lock-free synchronization in place of the Redis mutex
+
+Today's presence updates take a `simple-redis-mutex` per user before doing a read-modify-write on the presence hash — 5 Redis round-trips per update (`SET NX PX` lock acquire, `HGET body`, `JSON.parse` + JS mutation, `HSET body`, `EVALSHA release`), and the release script publishes a notification fanout to every PM2 worker subscribed to `@simple-redis-mutex:locks-releases`. Under WS connect/disconnect churn that lock-release fanout was a real cost on the data-side Redis instance (it shows up in `commandstats`).
+
+The next-pass replacements, ordered by how much architectural change they require:
+
+- **Server-side atomic ops via Lua.** The simplest swap: one `EVAL` per presence update that reads the hash, mutates the relevant fields in-script, and writes the result atomically on the Redis side. One round-trip, no client-held lock, no lock-release fanout. Doesn't change the architecture; just collapses 5 round-trips into 1.
+- **CRDT-like presence state.** Model presence as a join-semilattice so concurrent updates merge deterministically. Each worker writes its own slice (`connections:{workerId}` for that worker's count, last-activity, etc.); the aggregate is computed at read time. Connection count is a sum across slices; status is a fixed priority order (`away > online > idle > offline`) with a per-update timestamp tiebreaker. No coordination needed because no concurrent writer ever touches the same key.
+- **Single-writer-per-user routing.** In the `presence-pubsub` macroservice, consistent-hash by `user_id` and pin every operation on a user to one worker. Concurrent updates from the user's N open connections then queue inside that worker's event loop — single-threaded JS already serializes them for free. Redis becomes a *durable write-through cache* of the in-memory state instead of the synchronization point. Cost: the routing layer (Gateway + macroservice mesh) has to be hash-aware.
+- **Event-sourced presence.** Append every presence-relevant event (connect, disconnect, status-change, away-message) to a Redis Stream (or Kafka further out). Consumers compute derived state. No writer ever waits on a reader; durability and read-replica scale-out come along for free.
+
+The cumulative direction is "treat Redis-as-coordinator as a tax to remove": each step moves synchronization out of Redis and either into atomic Redis-side ops, into the data model itself, or into single-threaded JS event loops where it's free.
+
 #### Queuing techniques worth considering
 
 - **Per-recipient ordered queues** for fanout — guarantees in-order delivery per channel without forcing a single global order.
