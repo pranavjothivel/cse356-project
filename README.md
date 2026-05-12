@@ -50,7 +50,7 @@ cd smoke-tests && npm install && npm test       # default target = prod LB
 TARGET=http://localhost:3000 npm test           # local dev backend
 ```
 
-Deeper verification: load-generator runs (archived in [`loadgen-reports/`](loadgen-reports/)), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
+Deeper verification: our ad-hoc loadgen runs (archived in [`loadgen-reports/`](loadgen-reports/) — distinct from the course grading load generator, which runs externally), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
 
 ## 3. Scaling and Load Handling
 
@@ -107,7 +107,8 @@ infra/
   haproxy/, nginx/, pgbouncer/, lb-sysctl-heavy.conf
 project-docs/           ← public-facing docs (this folder)
 claude-docs/            ← raw session notes (source for project-docs/)
-loadgen-reports/        ← archived loadgen run outputs
+loadgen-reports/        ← outputs from our ad-hoc loadgen runs
+                          (not the course grading load generator)
 .github/workflows/      ← deploy.yml + rolling-hot-deploy.yml
 ```
 
@@ -122,7 +123,7 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | **Jacky Chen** | Authentication (local + OAuth), search, attachment system, message-send hot path, HAProxy CPU tuning |
 | **Zach Decena** | Direct conversations (DMs + group DMs), messaging/presence optimization, issue tracking, vertical + horizontal node scaling |
 
-**Communication & process** — primary channel is the team Discord, with **Sentry** (unhandled exceptions thrown by app workers, with stack trace and request context), **Grafana Cloud** (Loki logs + Prometheus metrics), and **Axiom** (HAProxy access-log tail) alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. The hard deadline was **4/13 "Go Live"**, after which the load generator simulated real end-users continuously for the 4-week Test Traffic Period. We finished the majority of feature work well before Go Live so the team could spend the rest of the window catching bugs that the pre-Live API tests didn't reveal under real-world traffic patterns; "what's the binding constraint right now" framed each new round of work.
+**Communication & process** — primary channel is the team Discord, with **Sentry** (unhandled exceptions thrown by app workers, with stack trace and request context), **Grafana Cloud** (Loki logs + Prometheus metrics), and **Axiom** (HAProxy access-log tail) alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. The hard deadline was **4/13 "Go Live"**, after which the **course grading load generator** simulated real end-users continuously for the 4-week Test Traffic Period. We finished the majority of feature work well before Go Live so the team could spend the rest of the window catching bugs that the pre-Live API tests didn't reveal under real-world traffic patterns; "what's the binding constraint right now" framed each new round of work.
 
 **Full per-member contribution detail with commit citations: [project-docs/TEAM.md](project-docs/TEAM.md).**
 

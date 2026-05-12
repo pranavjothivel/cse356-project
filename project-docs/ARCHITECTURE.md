@@ -12,7 +12,7 @@ Source: [`diagrams/architecture.mmd`](diagrams/architecture.mmd) (mermaid).
 
 | Component | Role |
 |---|---|
-| **Clients** | The React SPA served from the LB and the headless API-driven load generator clients used for capacity testing. Both speak HTTPS for REST and WSS for the realtime channel. |
+| **Clients** | The React SPA served from the LB, plus two distinct populations of headless API-driven clients: the **course grading load generator's** simulated end-users (running continuously throughout the Test Traffic Period) and **our own ad-hoc loadgen** runs that we drove against the cluster from a developer laptop / the loadgen node during tuning passes. All three populations speak HTTPS for REST and WSS for the realtime channel. |
 | **HAProxy + Nginx (`group1-lb-02`)** | TLS termination, HTTP/2 ALPN, routing (`/api/*` → API pool, WS upgrade → WS pool, `/minio/*` → MinIO, everything else → Nginx-served SPA). Heavy TCP tune (BBR, `infra/lb-sysctl-heavy.conf`). A second LB (`group1-web-lb01`) exists historically but is being phased out — current diagrams show only `lb-02`. |
 | **API pool** | Stateless Node workers with `WORKER_ROLE=http` or `all`: serve REST endpoints, publish broadcasts onto Redis-02, write/read Postgres and Redis-01. Members: `group1-api-node-01/02/03/http-01`. |
 | **WS pool** | Node workers with `WORKER_ROLE=ws`: hold WebSocket connections, subscribe to per-worker pub/sub channels on Redis-02, deliver broadcasts locally. Members: `group1-api-node-04/05/06/07`. Uses the `ws` library on port `:3000` alongside the local Express HTTP server. |

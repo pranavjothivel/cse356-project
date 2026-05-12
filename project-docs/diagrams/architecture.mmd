@@ -2,7 +2,7 @@
 %% Components: HAProxy LB, API pool, WS pool, PgBouncer, Redis 01
 %% (sessions/cache/queue/presence), Redis 02 (pub/sub fanout), PostgreSQL, MinIO.
 flowchart TB
-    Clients["Clients<br/>(browser React SPA and<br/>load generator headless clients)"]
+    Clients["Clients<br/>(browser React SPA,<br/>course grading load generator clients,<br/>and our ad-hoc loadgen clients)"]
 
     LB["group1-lb-02<br/>(HAProxy + Nginx)"]
 

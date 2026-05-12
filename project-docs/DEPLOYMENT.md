@@ -184,7 +184,7 @@ Verification layers, lightest to heaviest:
   ```
 
 - **Manual smoke tests** through the React SPA after each deploy — log in, send a message, open a DM.
-- **Load-generator runs** against the cluster — headless API-driven clients in [`loadgen-reports/`](../loadgen-reports/) (the JSON files are run summaries; the corresponding `.log` files have per-request traces).
+- **Our ad-hoc loadgen runs** against the cluster — headless API-driven clients we drove from a developer laptop / the loadgen node during tuning passes; outputs in [`loadgen-reports/`](../loadgen-reports/) (the JSON files are run summaries; the corresponding `.log` files have per-request traces). This is distinct from the **course grading load generator** that ran continuously against the deployment during the 4-week Test Traffic Period and which we did not control.
 - **TLS-probe** — [`scripts/tls-probe/tls-probe.sh`](../scripts/tls-probe/tls-probe.sh) characterizes LB-side cold-handshake latency over a configurable window. Output CSVs in `loadgen-reports/2026-05-06-tls-probe*.csv`.
 - **Production telemetry** — Grafana Cloud dashboards (Loki for logs, Prometheus/Mimir for metrics) fed from the telemetry node via Grafana Alloy; HAProxy `/stats`; Axiom for HAProxy access-log tail; Sentry for unhandled exceptions (Sentry is currently disabled in the codepath, kept for re-enable).
 

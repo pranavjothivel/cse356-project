@@ -51,7 +51,8 @@ cse356-project/
 │   └── diagrams/
 ├── claude-docs/               ← raw session notes / decision logs (source for the
 │                                 public docs in project-docs/)
-├── loadgen-reports/           ← archived loadgen run outputs
+├── loadgen-reports/           ← archived outputs from our ad-hoc loadgen runs
+│                                (not the course grading load generator — that's external)
 ├── scripts/                   ← repo-level scripts (e.g. tls-probe)
 ├── smoke-tests/               ← Jest-based post-deploy sanity checks
 └── .github/workflows/         ← CI/CD pipelines (deploy.yml, rolling-hot-deploy.yml,
@@ -116,7 +117,7 @@ The verification surface, lightest to heaviest:
   ```
 
 - **Manual smoke** — open the SPA at `https://group1.cse356.compas.cs.stonybrook.edu`, log in, send a message in a community and a DM. Check the per-component sections of [SCALING.md](SCALING.md) for the regression risks that have bitten us before.
-- **Load generator runs** — headless API-driven clients drive the system the same way the course's grading load generator does. Reports archived under `loadgen-reports/`. Filename convention: `2026-MM-DD-<scope>-<state>.{json,log}`. The JSON is the run summary; the `.log` has per-request traces.
+- **Our ad-hoc loadgen runs** — headless API-driven clients we drove against the cluster during tuning to validate specific fixes (different mechanism from the **course grading load generator**, which is course-run, ran continuously through the Test Traffic Period, and which we did not control). Both kinds of clients hit the same REST + WS surface. Reports from our runs archived under `loadgen-reports/`; filename convention `2026-MM-DD-<scope>-<state>.{json,log}` — the JSON is the run summary, the `.log` has per-request traces.
 - **TLS-probe** — `scripts/tls-probe/tls-probe.sh` measures cold-handshake latency at the LB; useful to isolate LB-side jitter from app-side cost.
 - **PM2 health** — `sudo -u deploy pm2 jlist | jq` after a deploy; rising `restarts` is a smell.
 - **HAProxy stats** — `:8404/stats` on either LB. Backend column color = health.
@@ -147,14 +148,14 @@ Pub/sub fanout overload on Redis-02. The fix is structural (per-worker channels 
 `deploy-lb-configs` reloads HAProxy after a deploy, which **wipes runtime `state ready` overrides**. If you marked a backend `disabled` in the config and re-enabled it via socket, the reload reverts. The fix: don't ship new backends as `disabled` in the config; rely on the default health-check window to hold them DOWN until they pass. See `feedback_haproxy_runtime_state_lost_on_reload` in the memory store, and the parked-pool comments in `infra/haproxy/haproxy.cfg`.
 
 ### "Logged in but no presence updates"
-The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The headless API-driven load generator clients have hit this bug too — the client-side fix is a one-time pre-filter on the raw WebSocket message event that holds the connect Promise unresolved until the exact frame `"ready"` arrives.
+The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The course grading load generator's clients have hit this bug too — the client-side fix is a one-time pre-filter on the raw WebSocket message event that holds the connect Promise unresolved until the exact frame `"ready"` arrives.
 
 ### `sendMessage` returning 403 "not a channel member" right after a successful join
-Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was traced to the load generator silently treating failed `POST /api/communities/:id/join` responses (500 under load) as successful, then attempting `sendMessage` as a non-member. The fix landed on the course side (the load generator was updated to surface join errors explicitly). A temporary fall-back in `sendMessage` that auto-joined the user on a missing-membership lookup was used during the incident window and then reverted once the upstream patch was deployed. If a similar pattern reappears, first confirm whether the client is correctly distinguishing success from failure on the join call before reaching for a server-side workaround.
+Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was traced to the **course grading load generator** silently treating failed `POST /api/communities/:id/join` responses (500 under load) as successful, then attempting `sendMessage` as a non-member. The fix landed on the course side (the grading load generator was updated to surface join errors explicitly). A temporary fall-back in `sendMessage` that auto-joined the user on a missing-membership lookup was used during the incident window and then reverted once the upstream patch was deployed. If a similar pattern reappears, first confirm whether the client is correctly distinguishing success from failure on the join call before reaching for a server-side workaround.
 
 ## Known issues / future improvements
 
-- **Load-generator client / server URL drift**. The generated client expects `GET /api/unread` (we exposed `/api/conversations/unread`). The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
+- **Course grading load-generator client / server URL drift**. The generated client (course-side) expects `GET /api/unread`; we exposed `/api/conversations/unread`. The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
 - **Community find-or-create**. Duplicate-name `POST /communities` currently returns 409 + the existing community ID; the outage monitor doesn't handle 409 and keeps reporting failure. Proposed fix: auto-join on duplicate name.
 - **Dual-table FTS** — see [SCALING.md, Bottleneck 2 tradeoff](SCALING.md#bottleneck-2--gin-pending-list-flushes-serializing-inserts). Moving FTS off the write path entirely is the obvious next step beyond `fastupdate=off`.
 - **Read replica** — for `GET /api/messages` / `/api/search` / `/api/communities`. Should roughly double peak rate.

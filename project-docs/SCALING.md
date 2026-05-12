@@ -10,8 +10,10 @@ These are the final numbers for `group1`. The remainder of this document walks t
 
 ## How we measured
 
-- **Load generator runs** (headless API-driven clients) ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. Peak Conn and Peak Rate are therefore *demand-side* numbers — the load generator kept pushing until something broke. Reducing failure rates directly raised both ceilings.
-- **Loadgen reports** in [`loadgen-reports/`](../loadgen-reports/) capture the discrete tuning passes (BGSAVE-off baseline, GC tuning, optimistic broadcast, etc.) — JSON results paired with their corresponding `.log` files.
+Two distinct sources of load drove the system, and this document refers to them with deliberately different names so they're not conflated:
+
+- **Course grading load generator** — the course-run infrastructure (out of our control) that connected headless API-driven clients to our deployment and ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. After 4/13 "Go Live" it ran continuously for the 4-week **Test Traffic Period**, simulating real end-users. Peak Conn and Peak Rate in the headline are therefore *demand-side* numbers — the grading load generator kept pushing until something broke; reducing failure rates directly raised both ceilings.
+- **Our ad-hoc loadgen runs** — discrete test passes the team kicked off from a developer laptop / the loadgen node against the prod cluster to validate specific fixes (BGSAVE-off baseline, GC tuning, optimistic broadcast variants, etc.). Outputs archived in [`loadgen-reports/`](../loadgen-reports/) — JSON run summaries paired with `.log` files containing per-request traces. These are *our* runs; the grading load generator's traffic is not captured here.
 - **Telemetry stack**: Grafana Alloy on every node and on a dedicated `group1-telemetry-01` collector, shipping logs + metrics to **Grafana Cloud** (Loki for logs, Mimir/Prometheus for metrics, hosted Grafana dashboards). HAProxy stats endpoint (`/stats`) for live LB state, Sentry for unhandled exceptions, **Axiom for HAProxy live log streaming** (per-request access logs piped via Vector for ad-hoc tail/aggregation during incidents). Inline `console.log` traces during deep-dive incident investigations.
 - **TLS-probe CSVs** in `loadgen-reports/2026-05-06-tls-probe*.csv` (script in [`scripts/tls-probe/`](../scripts/tls-probe/)) — used to characterize LB-side cold-handshake latency separately from app-side cost.
 
@@ -22,7 +24,7 @@ The architecture the headline was measured against is described in [ARCHITECTURE
 ## Bottleneck 1 — PostgreSQL connection pool exhaustion
 
 ### Problem
-The default Sequelize pool size was `max: 5` per worker. The hottest write endpoint (`POST /api/conversations/:id/read`) ran **7–8 sequential queries** per request (a redundant `Conversation.findByPk` *and* `Channel.findByPk`, membership check, message lookup, an `isForwardRead` round-trip, the `member.save()` update, and on conversations a participant list fetch for the broadcast). Under load-generator burst all pool connections sat busy; new requests queued past Sequelize's 60s `acquire` timeout, which was longer than HAProxy's `timeout server 50s` — so HAProxy 504'd first, silently.
+The default Sequelize pool size was `max: 5` per worker. The hottest write endpoint (`POST /api/conversations/:id/read`) ran **7–8 sequential queries** per request (a redundant `Conversation.findByPk` *and* `Channel.findByPk`, membership check, message lookup, an `isForwardRead` round-trip, the `member.save()` update, and on conversations a participant list fetch for the broadcast). Under grading-load-generator burst all pool connections sat busy; new requests queued past Sequelize's 60s `acquire` timeout, which was longer than HAProxy's `timeout server 50s` — so HAProxy 504'd first, silently.
 
 ### Evidence
 - **9,685 HAProxy 504 Gateway Timeouts in one day** (2026-04-13). Every log line carried timer `Tr=-1, Ta≈50000ms` and termination flag `sH--` — the signature of "TCP accepted, server never responded inside `timeout server`."
@@ -39,7 +41,7 @@ Multiple coordinated changes, by date:
 5. **Dedicated Sequelize pool for search** (`80e4d01` by Pranav Jothivel) — split `server/src/db.js` to export both `sequelize` (main app pool, `max:14`) and `searchSequelize` (dedicated pool, `max:6`) so a heavy FTS query holding a pool slot can never starve the message-send hot path. `server/src/routes/search.js` was migrated to import the search pool. The split also opened the door to per-pool `statement_timeout` tuning.
 
 ### Effect
-504s stopped reproducing during loadgen runs. `pool.acquire` time fell from "near-timeout" to sub-millisecond on the steady-state path. The DB pool stopped being a binding constraint for the rest of the project; later bottlenecks were *downstream* of fixed pool capacity, not the pool itself.
+504s stopped reproducing in our ad-hoc loadgen runs and disappeared from the grading load generator's failure counts. `pool.acquire` time fell from "near-timeout" to sub-millisecond on the steady-state path. The DB pool stopped being a binding constraint for the rest of the project; later bottlenecks were *downstream* of fixed pool capacity, not the pool itself.
 
 ### Tradeoff / limitation
 PgBouncer in transaction mode is incompatible with session-scoped Postgres features (`SET LOCAL`, prepared statements at the connection level, advisory locks). We don't use any of those — but it's a constraint on what future features can rely on.
@@ -49,7 +51,7 @@ PgBouncer in transaction mode is incompatible with session-scoped Postgres featu
 ## Bottleneck 2 — GIN pending-list flushes serializing inserts
 
 ### Problem
-The full-text search index is a `GIN` index on `messages.content_tsv`. GIN's default `fastupdate=on` buffers index entries into a per-index *pending list* on every INSERT; the pending list is flushed lazily, but the flush is a single serialized operation on the index. Under load-generator write burst, the pending list grew faster than the lazy flush could keep up, and at some point an INSERT triggered a flush that took multiple seconds and serialized every concurrent INSERT behind it.
+The full-text search index is a `GIN` index on `messages.content_tsv`. GIN's default `fastupdate=on` buffers index entries into a per-index *pending list* on every INSERT; the pending list is flushed lazily, but the flush is a single serialized operation on the index. Under the grading load generator's sustained write rate, the pending list grew faster than the lazy flush could keep up, and at some point an INSERT triggered a flush that took multiple seconds and serialized every concurrent INSERT behind it.
 
 ### Evidence
 - A manual `gin_clean_pending_list('messages_content_fts_simple_idx')` measured **3.1 s for 190 pages** on 2026-05-04 — and that was off-peak. During load the pending list was larger.
@@ -64,7 +66,7 @@ ALTER INDEX messages_content_fts_simple_idx SET (fastupdate = off);
 Applied directly via `psql` on `group1-db-psql-01` on 2026-05-04 ~14:42 EDT, out-of-band. A final `gin_clean_pending_list()` post-ALTER flushed the leftover 257 pages in 4 s; with `fastupdate=off`, no future flushes will ever fire on this index.
 
 ### Effect
-Delivery p95 expected to drop into the **300–700 ms** band based on the pre-flush vs. flush latency ratio. Subsequent loadgen runs confirmed the long INSERT tail had vanished.
+Delivery p95 expected to drop into the **300–700 ms** band based on the pre-flush vs. flush latency ratio. Subsequent ad-hoc loadgen runs confirmed the long INSERT tail had vanished, and the grading load generator's per-message latency distribution flattened to match.
 
 ### Tradeoff / limitation
 Per-row INSERT latency goes up slightly (each row now updates the index posting tree directly instead of appending to the pending list). For our workload this is a clear win — bounded p99 beats unbounded amortized — but on a write-much-heavier workload the trade would shift.
@@ -210,7 +212,7 @@ Additionally:
 - `timeout http-keep-alive` falling back to `timeout client 50s` closed idle pooled connections too aggressively for chat traffic, paying handshake cost on every gap.
 
 ### Evidence
-- HAProxy stats showed concurrent connections approaching the 8192 cap during peak loadgen.
+- HAProxy stats showed concurrent connections approaching the 8192 cap during peak grading-load-generator traffic.
 - TLS-probe CSVs (`loadgen-reports/2026-05-06-tls-probe*.csv`) captured cold-handshake latency in the 600–1100 ms range pre-tuning.
 - e2e delivery p99 was 638 → **1144 ms** under cold-handshake amplification.
 
