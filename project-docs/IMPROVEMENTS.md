@@ -44,6 +44,16 @@ Keep the **monorepo** structure (one repo, one CI/CD model, shared tooling) but 
 
 The `messages-coordinator` is the synchronization point: a `POST /api/messages` becomes three queued writes (pub/sub fanout, Postgres durable write, search index write), all dispatched in parallel. The HTTP response acknowledges the *intent* once the message has been accepted into the queue; the user's optimistic UI shows the message immediately; durability and searchability catch up within milliseconds. This is the **write-behind / queued-acknowledge** pattern — trades a small amount of consistency-on-disk for a large amount of perceived latency.
 
+#### Session cookie vs JWT for inter-service auth
+
+Today the API issues a server-side **session cookie** backed by Redis (`connect-redis`); every request resolves the session via a Redis lookup, partly mitigated by the in-memory cache on `passport.deserializeUser`. Fine for a monolith — the lookup is cheap and revocation (logout / force-logout / linked-account changes) is a `DEL`.
+
+In a macroservice world the tradeoff shifts. Each cross-service RPC either re-verifies the session against the same central Redis (a network hop per service per request) or trusts the upstream service's identity claim (and now `messages-coordinator` and `storage` are mutually trusting in a way that complicates a security review). The natural alternative is to issue a **short-lived JWT** at the `auth` service after the initial session check; every other macroservice verifies the JWT signature locally against the `auth` service's public key with no network call.
+
+- **Pro JWT** — stateless cross-service auth, no Redis lookup on internal hops, scales linearly with macroservice count.
+- **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
+- **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
+
 #### Queuing techniques worth considering
 
 - **Per-recipient ordered queues** for fanout — guarantees in-order delivery per channel without forcing a single global order.
