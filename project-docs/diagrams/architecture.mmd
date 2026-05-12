@@ -4,7 +4,7 @@
 flowchart TB
     Clients["Clients<br/>(browser React SPA,<br/>course grading load generator clients,<br/>and our ad-hoc loadgen clients)"]
 
-    LB["group1-lb-02<br/>(HAProxy + Nginx)"]
+    LB["HAProxy + Nginx<br/>(the LB)"]
 
     subgraph API["API pool — WORKER_ROLE=http/all"]
         direction LR

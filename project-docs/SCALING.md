@@ -225,13 +225,10 @@ Additionally:
 | `1f51cd9` (#174) | `tune.ssl.lifetime 600 → 3600s` |
 | `ba63850` (#178) | Explicit `timeout http-keep-alive 600s` |
 | `d7a63eb` (#46) | Equal `weight 8` on backends (was `2× node1`) |
-| `67e5fc2` | Second LB `group1-lb-02` with BBR + heavy sysctl tune (`infra/lb-sysctl-heavy.conf`) |
+| `67e5fc2` | Migrated to a new LB host with BBR + heavy sysctl tune (`infra/lb-sysctl-heavy.conf`) — the original LB was retired in favor of this tuned replacement |
 
 ### Effect
 HAProxy CPU dropped from ~80% on 4 threads to ~25% across 16. The maxconn ceiling stopped showing up in stats. ALPN HTTP/2 eliminated the per-request handshake jitter that was pushing cold p99 to 1.1 s.
-
-### Tradeoff / limitation
-The two LBs aren't yet behind a floating IP or DNS round-robin in the deploy pipeline; LB-config changes must be pushed to both manually (runbook in [`infra/README.md`](../infra/README.md)). Documented and tooled, but a sharp edge.
 
 ---
 
@@ -277,6 +274,5 @@ Honest list:
 
 1. **Dual-table FTS.** The GIN-on-write-path pathology is mitigated (`fastupdate=off` bounds the cost) but not architecturally removed. A `message_search` table populated asynchronously after the message-send response would take FTS off the request path entirely. Out of scope for the term but the obvious next step.
 2. **Read replica.** All reads still hit the primary. A read replica for `GET /api/messages` / `GET /api/search` / `GET /api/communities` would roughly double peak rate by freeing primary CPU for writes.
-3. **`lb02` outside the deploy pipeline.** The deploy pipeline only pushes to `lb01`; `lb02` is updated manually per the runbook in `infra/README.md`. Sharp edge; fixable.
-4. **No formal Redis persistence on `:6379`.** We chose this deliberately (everything is rebuildable from PG), but it means a Redis-01 restart is a brief session-loss event for users. AOF with a lax fsync policy would buy persistence without the BGSAVE stall.
-5. **No autoscaling.** The cluster is hand-scaled. Adding a node is well-documented (`claude-docs/api-node-bootstrap.md`) but requires a human.
+3. **No formal Redis persistence on `:6379`.** We chose this deliberately (everything is rebuildable from PG), but it means a Redis-01 restart is a brief session-loss event for users. AOF with a lax fsync policy would buy persistence without the BGSAVE stall.
+4. **No autoscaling.** The cluster is hand-scaled. Adding a node is well-documented (`claude-docs/api-node-bootstrap.md`) but requires a human.

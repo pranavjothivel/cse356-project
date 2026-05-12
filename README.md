@@ -65,10 +65,10 @@ The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.3 % u
 | 5 | Pub/sub fanout amplification (more WS subscribers = more publish work) | Three-pass restructure to per-worker pub/sub channels | Fanout cost scales with active receivers, not subscriber count |
 | 6 | WS broadcast payload size & hot-path cost (per-`deliverLocal` JSON.stringify; api-only nodes iterating empty `users` Map) | Pre-stringify at publisher, skip `deliverLocal` on api-only workers, chunk per-user fanout, debounce per-user `broadcastPresenceChange` | Per-publish event-loop cost on WS workers down substantially; api-only CPU stops spiking on broadcasts |
 | 7 | Redis RDB BGSAVE forks (53 s saves, ~100 ms fork pauses per minute) | Disabled RDB on Redis-01 (state rebuildable from PG) | Periodic latency artifacts gone |
-| 8 | HAProxy single-thread + tight maxconn | `nbthread 4→16`, `maxconn 8192→32768`, HTTP/2 ALPN, `tune.ssl.lifetime`, second LB with BBR sysctl tune | HAProxy CPU 80% → 25%; cold p99 638 → ~400 ms |
+| 8 | HAProxy single-thread + tight maxconn | `nbthread 4→16`, `maxconn 8192→32768`, HTTP/2 ALPN, `tune.ssl.lifetime`, plus a mid-term migration to a heavily-tuned LB host (BBR + sysctl tune) | HAProxy CPU 80% → 25%; cold p99 638 → ~400 ms |
 | 9 | Monolith worker (REST + WS on the same event loop) | `WORKER_ROLE` split: `http` / `ws` / `all` per node | WS event loops free of REST stalls; api-only workers skip pub/sub fanout |
 
-The remaining limitations (dual-table FTS, read replica, lb02-in-pipeline, AOF on Redis-01, integration tests) are listed honestly in the detail doc.
+The remaining limitations (dual-table FTS, read replica, AOF on Redis-01, integration tests) are listed honestly in the detail doc.
 
 **Full analysis with evidence, per-bottleneck Problem → Evidence → Fix → Effect → Tradeoff format: [project-docs/SCALING.md](project-docs/SCALING.md).**
 

@@ -125,21 +125,9 @@ For local development, no GitHub secrets are involved — copy `server/.env.exam
 
 For situations where the fan-out parallel approach is too aggressive (large code changes, mid-incident hot deploys). Walks each app node in sequence: HAProxy drain → wait for connections to bleed off → rsync + `pm2 reload` → poll PM2 health → un-drain → next node. Configurable retry on SSH flake (5 attempts) and a rollback path on PM2 health failure.
 
-### LB02
+### LB updates
 
-`deploy.yml` only pushes haproxy/nginx/frontend to `lb01`. Updates to `lb02` are pushed manually per the runbook in [`infra/README.md`](../infra/README.md#deploying-to-both-lbs):
-
-```bash
-KEY=<PATH TO CLANODE (OR OTHER CLOUD VPC) SSH KEY>
-
-scp -i $KEY infra/haproxy/haproxy-lb02.cfg root@130.245.136.142:/etc/haproxy/haproxy.cfg
-ssh -i $KEY root@130.245.136.142 'haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy'
-
-scp -i $KEY infra/nginx/lb02/frontend root@130.245.136.142:/etc/nginx/sites-available/frontend
-ssh -i $KEY root@130.245.136.142 'nginx -t && systemctl reload nginx'
-
-rsync -az --delete -e "ssh -i $KEY" client/dist/ root@130.245.136.142:/srv/frontend/dist/
-```
+LB updates are handled by the same deploy pipeline. `deploy-frontend` rsyncs the built SPA bundle to the LB, and the HAProxy / Nginx config job pushes `infra/haproxy/` + `infra/nginx/` changes to the LB and reloads each daemon. The current LB host is the BBR + heavy-sysctl-tuned successor that replaced the original LB mid-term; the historical `infra/haproxy/haproxy-lb02.cfg` filename is retained for the migration record but the active path is `infra/haproxy/haproxy.cfg`.
 
 ## Starting / stopping the system
 

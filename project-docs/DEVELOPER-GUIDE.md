@@ -38,10 +38,10 @@ cse356-project/
 ├── infra/
 │   ├── nodes.yml              ← node inventory, source of truth for the deploy pipeline
 │   ├── README.md              ← infra-level runbook
-│   ├── haproxy/               ← haproxy.cfg (lb01) + haproxy-lb02.cfg
-│   ├── nginx/                 ← Nginx vhosts (lb01 + lb02 variant)
+│   ├── haproxy/               ← HAProxy config(s) for the LB
+│   ├── nginx/                 ← Nginx vhost(s) for the LB
 │   ├── pgbouncer/             ← pgbouncer.ini template + provision.sh
-│   └── lb-sysctl-heavy.conf   ← lb02 TCP/IP tune
+│   └── lb-sysctl-heavy.conf   ← LB TCP/IP tune (BBR + buffers + backlog)
 ├── project-docs/              ← this folder
 │   ├── ARCHITECTURE.md
 │   ├── DEPLOYMENT.md
@@ -70,7 +70,7 @@ cse356-project/
 | `server/src/auth/passport.js` | Passport strategies, the `User.providers` JSONB multi-provider model, and `setupOidcStrategy` (fire-and-forget at boot so a Keycloak outage doesn't crash workers). |
 | `server/ecosystem.config.js` | PM2 cluster config — `instances: 'max'`, `max_memory_restart`, log paths. |
 | `infra/nodes.yml` | Node inventory. Editing this *is* the way to add/remove an app node — the deploy workflow reads it as a matrix. |
-| `infra/haproxy/haproxy.cfg`, `infra/haproxy/haproxy-lb02.cfg` | The two HAProxy configs. `lb02` serves `:80` directly instead of redirecting; otherwise identical backends. |
+| `infra/haproxy/haproxy.cfg` (and the historical `haproxy-lb02.cfg` retained for the migration record) | HAProxy config for the LB. Serves `:80` and `:443` with identical ACLs. |
 | `.github/workflows/deploy.yml` | The full-deploy pipeline (matrix + frontend + HAProxy/Nginx fan-out). |
 | `.github/workflows/rolling-hot-deploy.yml` | Node-by-node drain → deploy → un-drain pipeline for mid-incident hot deploys. |
 | `server/scripts/migrations/0007-baseline-schema.sql` | The current production schema, dumped from `psql-01`. Use this when bootstrapping a fresh DB. |
@@ -127,8 +127,8 @@ A future improvement would be expanding the existing Jest suite into a full inte
 
 ## Debugging common problems
 
-### "I logged in but `/me` returns 401" (the HTTP-on-lb02 trap)
-The session cookie is set with `secure: process.env.NODE_ENV === 'production'`, i.e. `Secure` in prod. If the LB is serving plain HTTP somewhere (notably `lb-02:80`), the `Set-Cookie` header is silently dropped by the browser on the HTTP response, so the login succeeds (200) but no session cookie comes back. Either:
+### "I logged in but `/me` returns 401" (the plain-HTTP cookie trap)
+The session cookie is set with `secure: process.env.NODE_ENV === 'production'`, i.e. `Secure` in prod. If the LB is serving plain HTTP (currently on `:80` alongside `:443`), the `Set-Cookie` header is silently dropped by the browser on the HTTP response, so the login succeeds (200) but no session cookie comes back. Either:
 - Route through `https://` only, or
 - Relax `secure` to `'auto'` in `server/src/app.js` (the comment near that line warns about this exact symptom).
 
@@ -159,5 +159,4 @@ Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was tra
 - **Community find-or-create**. Duplicate-name `POST /communities` currently returns 409 + the existing community ID; the outage monitor doesn't handle 409 and keeps reporting failure. Proposed fix: auto-join on duplicate name.
 - **Dual-table FTS** — see [SCALING.md, Bottleneck 2 tradeoff](SCALING.md#bottleneck-2--gin-pending-list-flushes-serializing-inserts). Moving FTS off the write path entirely is the obvious next step beyond `fastupdate=off`.
 - **Read replica** — for `GET /api/messages` / `/api/search` / `/api/communities`. Should roughly double peak rate.
-- **lb02 in deploy pipeline** — currently manual; the pipeline should fan out to both LBs.
 - **AOF on Redis-01** — we disabled RDB to remove the BGSAVE fork pauses (see [SCALING.md, Bottleneck 7](SCALING.md#bottleneck-7--redis-rdb-bgsave-forks-blocking-the-command-thread)). AOF with `appendfsync everysec` would buy persistence without the fork pause; we just haven't switched.

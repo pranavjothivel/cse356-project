@@ -13,7 +13,7 @@ Source: [`diagrams/architecture.mmd`](diagrams/architecture.mmd) (mermaid).
 | Component | Role |
 |---|---|
 | **Clients** | The React SPA served from the LB, plus two distinct populations of headless API-driven clients: the **course grading load generator's** simulated end-users (running continuously throughout the Test Traffic Period) and **our own ad-hoc loadgen** runs that we drove against the cluster from a developer laptop / the loadgen node during tuning passes. All three populations speak HTTPS for REST and WSS for the realtime channel. |
-| **HAProxy + Nginx (`group1-lb-02`)** | TLS termination, HTTP/2 ALPN, routing (`/api/*` → API pool, WS upgrade → WS pool, `/minio/*` → MinIO, everything else → Nginx-served SPA). Heavy TCP tune (BBR, `infra/lb-sysctl-heavy.conf`). A second LB (`group1-web-lb01`) exists historically but is being phased out — current diagrams show only `lb-02`. |
+| **HAProxy + Nginx (the LB)** | TLS termination, HTTP/2 ALPN, routing (`/api/*` → API pool, WS upgrade → WS pool, `/minio/*` → MinIO, everything else → Nginx-served SPA). Heavy TCP tune (BBR, `infra/lb-sysctl-heavy.conf`) — this is the replacement LB host the project migrated to mid-term after the original LB hit its CPU and tuning ceiling. |
 | **API pool** | Stateless Node workers with `WORKER_ROLE=http` or `all`: serve REST endpoints, publish broadcasts onto Redis-02, write/read Postgres and Redis-01. Members: `group1-api-node-01/02/03/http-01`. |
 | **WS pool** | Node workers with `WORKER_ROLE=ws`: hold WebSocket connections, subscribe to per-worker pub/sub channels on Redis-02, deliver broadcasts locally. Members: `group1-api-node-04/05/06/07`. Uses the `ws` library on port `:3000` alongside the local Express HTTP server. |
 | **PgBouncer (per app node)** | Local transaction-pooling proxy in front of Postgres. App processes connect to `127.0.0.1:6432`; PgBouncer multiplexes onto a small number of real Postgres connections. |
@@ -110,13 +110,13 @@ Production runs `sequelize.sync()` *without* `alter` (deliberately — `alter:tr
 
 | Tier | Nodes | Purpose |
 |---|---|---|
-| LB | `group1-web-lb01`, `group1-lb-02` | TLS, routing, static SPA, MinIO proxy. lb-02 is the active node. |
+| LB | (single active node) | HAProxy + Nginx — TLS, routing, static SPA, MinIO proxy. The original LB host was replaced mid-term by a tuned successor (BBR + heavy sysctl); only the successor is in rotation. |
 | API pool | `group1-api-node-{01,02,03,http-01}` | REST handlers (`WORKER_ROLE=http`/`all`). |
 | WS pool | `group1-api-node-{04,05,06,07}` | WebSocket fanout (`WORKER_ROLE=ws`). |
 | DB | `group1-db-psql-01` | Postgres (single primary). |
 | Redis-01 | `group1-db-redis-01` | Sessions, cache, presence, mutex. |
 | Redis-02 | `group1-db-redis-02` | Pub/sub fanout only. |
-| Object store | MinIO (currently colocated on `lb01`) | Attachments. |
+| Object store | MinIO | S3-compatible storage for attachments; reached via the LB's `/minio/*` proxy from clients and directly over the private network from app nodes. |
 | Telemetry | `group1-telemetry-01` | Grafana Alloy receiver — aggregates logs + metrics from every node and **forwards to Grafana Cloud** (Loki for logs, Prometheus/Mimir for metrics, hosted Grafana dashboards). HAProxy access logs additionally stream to Axiom via Vector for live tail during incidents. **Sentry** captures any unhandled exception thrown by an app worker, with the stack trace and request context, so errors that don't bubble up as a non-2xx response are still surfaced — currently disabled in the live codepath after a perf/value tradeoff but the integration is in place. |
 
 Full IP and sizing details in [`infra/README.md`](../infra/README.md) and [`infra/nodes.yml`](../infra/nodes.yml).

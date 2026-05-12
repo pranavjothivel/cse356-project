@@ -5,7 +5,7 @@ Public-facing project documentation. The root [`README.md`](../README.md) is the
 | File | Covers |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Component model, request flows, all design-decision rationale |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Prereqs, env vars, local build, CI/CD pipelines, lb02 manual update, ops commands |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Prereqs, env vars, local build, CI/CD pipelines, ops commands |
 | [SCALING.md](SCALING.md) | Per-bottleneck analysis: problem → evidence → fix → effect → tradeoff |
 | [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md) | Repo layout, key files, how-to recipes, debugging, known issues |
 | [TEAM.md](TEAM.md) | Per-member contributions, communication, deadline process |
