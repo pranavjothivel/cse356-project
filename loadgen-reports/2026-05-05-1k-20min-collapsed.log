@@ -1,0 +1,212 @@
+[setup] Provisioning 1020 users (batch=20)...
+  provisioned 20/1020  provisioned 40/1020  provisioned 60/1020  provisioned 80/1020  provisioned 100/1020  provisioned 120/1020  provisioned 140/1020  provisioned 160/1020  provisioned 180/1020  provisioned 200/1020  provisioned 220/1020  provisioned 240/1020  provisioned 260/1020  provisioned 280/1020  provisioned 300/1020  provisioned 320/1020  provisioned 340/1020  provisioned 360/1020  provisioned 380/1020  provisioned 400/1020  provisioned 420/1020  provisioned 440/1020  provisioned 460/1020  provisioned 480/1020  provisioned 500/1020  provisioned 520/1020  provisioned 540/1020  provisioned 560/1020  provisioned 580/1020  provisioned 600/1020  provisioned 620/1020  provisioned 640/1020  provisioned 660/1020  provisioned 680/1020  provisioned 700/1020  provisioned 720/1020  provisioned 740/1020  provisioned 760/1020  provisioned 780/1020  provisioned 800/1020  provisioned 820/1020  provisioned 840/1020  provisioned 860/1020  provisioned 880/1020  provisioned 900/1020  provisioned 920/1020  provisioned 940/1020  provisioned 960/1020  provisioned 980/1020  provisioned 1000/1020  provisioned 1020/1020
+[setup] Provisioned 1020 users
+[setup] Creating community "loadgen-1778029310050" + channel "loadgen-channel"...
+[setup] Joining 1019 members to community...
+  joined 20/1019  joined 40/1019  joined 60/1019  joined 80/1019  joined 100/1019  joined 120/1019  joined 140/1019  joined 160/1019  joined 180/1019  joined 200/1019  joined 220/1019  joined 240/1019  joined 260/1019  joined 280/1019  joined 300/1019  joined 320/1019  joined 340/1019  joined 360/1019  joined 380/1019  joined 400/1019  joined 420/1019  joined 440/1019  joined 460/1019  joined 480/1019  joined 500/1019  joined 520/1019  joined 540/1019  joined 560/1019  joined 580/1019  joined 600/1019  joined 620/1019  joined 640/1019  joined 660/1019  joined 680/1019  joined 700/1019  joined 720/1019  joined 740/1019  joined 760/1019  joined 780/1019  joined 800/1019  joined 820/1019  joined 840/1019  joined 860/1019  joined 880/1019  joined 900/1019  joined 920/1019  joined 940/1019  joined 960/1019  joined 980/1019  joined 1000/1019  joined 1019/1019
+[setup] All members joined
+[setup] Enabling realtime for 1000 clients...
+  realtime 20/1000  realtime 40/1000  realtime 60/1000  realtime 80/1000  realtime 100/1000  realtime 120/1000  realtime 140/1000  realtime 160/1000  realtime 180/1000  realtime 200/1000  realtime 220/1000  realtime 240/1000  realtime 260/1000  realtime 280/1000  realtime 300/1000  realtime 320/1000  realtime 340/1000  realtime 360/1000  realtime 380/1000  realtime 400/1000  realtime 420/1000  realtime 440/1000  realtime 460/1000  realtime 480/1000  realtime 500/1000  realtime 520/1000  realtime 540/1000  realtime 560/1000  realtime 580/1000  realtime 600/1000  realtime 620/1000  realtime 640/1000  realtime 660/1000  realtime 680/1000  realtime 700/1000  realtime 720/1000  realtime 740/1000  realtime 760/1000  realtime 780/1000  realtime 800/1000  realtime 820/1000  realtime 840/1000  realtime 860/1000  realtime 880/1000  realtime 900/1000  realtime 920/1000  realtime 940/1000  realtime 960/1000  realtime 980/1000  realtime 1000/1000
+[setup] Realtime enabled
+[setup] 1000/1000 WS connections healthy
+[run] Starting send loop: 50 msg/s, ramp=30s, steady=1200s, 20 senders -> 1000 recipients
+[run] t=5.0s  posted=20  failed=0  samples=20000  recent_p95=1278ms  pending=20
+[run] t=10.4s  posted=53  failed=0  samples=56487  recent_p95=689ms  pending=59
+[run] t=15.4s  posted=157  failed=0  samples=148199  recent_p95=1193ms  pending=159
+[run] t=21.6s  posted=259  failed=0  samples=275980  recent_p95=1973ms  pending=279
+[run] t=26.7s  posted=419  failed=0  samples=417943  recent_p95=495ms  pending=419
+[run] t=32.0s  posted=599  failed=0  samples=605406  recent_p95=887ms  pending=619
+[run] t=37.1s  posted=797  failed=0  samples=795031  recent_p95=409ms  pending=799
+[run] t=42.6s  posted=962  failed=0  samples=975299  recent_p95=1803ms  pending=982
+[run] t=48.3s  posted=1102  failed=0  samples=1115932  recent_p95=1454ms  pending=1122
+[run] t=53.3s  posted=1262  failed=0  samples=1269053  recent_p95=249ms  pending=1282
+[run] t=59.2s  posted=1402  failed=0  samples=1416838  recent_p95=1763ms  pending=1422
+[run] t=64.3s  posted=1522  failed=0  samples=1535912  recent_p95=1262ms  pending=1562
+[run] t=69.9s  posted=1702  failed=0  samples=1716560  recent_p95=1391ms  pending=1722
+[run] t=75.0s  posted=1842  failed=0  samples=1857920  recent_p95=1299ms  pending=1882
+[run] t=80.2s  posted=1982  failed=0  samples=1999339  recent_p95=2036ms  pending=2022
+[run] t=85.3s  posted=2162  failed=0  samples=2162156  recent_p95=619ms  pending=2182
+[run] t=90.9s  posted=2342  failed=0  samples=2357372  recent_p95=1413ms  pending=2362
+[run] t=96.5s  posted=2462  failed=0  samples=2477829  recent_p95=1930ms  pending=2502
+[run] t=101.8s  posted=2581  failed=0  samples=2598366  recent_p95=1771ms  pending=2622
+[run] t=106.8s  posted=2722  failed=0  samples=2737988  recent_p95=1985ms  pending=2762
+[run] t=112.6s  posted=2822  failed=0  samples=2839209  recent_p95=1898ms  pending=2842
+[run] t=118.8s  posted=2942  failed=0  samples=2958720  recent_p95=2245ms  pending=2962
+[run] t=123.9s  posted=3062  failed=0  samples=3078356  recent_p95=1451ms  pending=3102
+[run] t=129.7s  posted=3162  failed=0  samples=3179114  recent_p95=2532ms  pending=3182
+[run] t=134.8s  posted=3301  failed=0  samples=3317120  recent_p95=1945ms  pending=3342
+[run] t=140.7s  posted=3422  failed=0  samples=3439580  recent_p95=1935ms  pending=3442
+[run] t=146.8s  posted=3542  failed=0  samples=3559750  recent_p95=1228ms  pending=3562
+[run] t=152.8s  posted=3682  failed=0  samples=3699015  recent_p95=2413ms  pending=3702
+[run] t=158.7s  posted=3822  failed=0  samples=3839480  recent_p95=2160ms  pending=3842
+[run] t=164.2s  posted=3922  failed=0  samples=3939704  recent_p95=2245ms  pending=3962
+[run] t=170.0s  posted=4042  failed=0  samples=4058619  recent_p95=1979ms  pending=4062
+[run] t=176.2s  posted=4182  failed=0  samples=4199806  recent_p95=2115ms  pending=4202
+[run] t=182.0s  posted=4342  failed=0  samples=4360293  recent_p95=2164ms  pending=4382
+[run] t=188.3s  posted=4442  failed=0  samples=4459164  recent_p95=2659ms  pending=4462
+[run] t=193.4s  posted=4542  failed=0  samples=4556698  recent_p95=1564ms  pending=4582
+[run] t=198.6s  posted=4642  failed=0  samples=4658815  recent_p95=1115ms  pending=4682
+[run] t=204.9s  posted=4742  failed=0  samples=4759792  recent_p95=2576ms  pending=4762
+[run] t=210.3s  posted=4822  failed=0  samples=4836706  recent_p95=2119ms  pending=4862
+[run] t=215.8s  posted=4962  failed=0  samples=4977326  recent_p95=1358ms  pending=4982
+[run] t=220.9s  posted=5142  failed=0  samples=5154660  recent_p95=1152ms  pending=5182
+[run] t=226.5s  posted=5261  failed=0  samples=5276881  recent_p95=1644ms  pending=5282
+[run] t=231.6s  posted=5382  failed=0  samples=5398325  recent_p95=1798ms  pending=5422
+[run] t=237.0s  posted=5562  failed=0  samples=5577968  recent_p95=1723ms  pending=5602
+[run] t=242.4s  posted=5762  failed=0  samples=5776510  recent_p95=1552ms  pending=5782
+[run] t=247.5s  posted=5942  failed=0  samples=5952029  recent_p95=1015ms  pending=5962
+[run] t=252.7s  posted=6062  failed=0  samples=6077712  recent_p95=1574ms  pending=6102
+[run] t=257.9s  posted=6202  failed=0  samples=6217651  recent_p95=1544ms  pending=6242
+[run] t=263.3s  posted=6342  failed=0  samples=6359618  recent_p95=2278ms  pending=6382
+[run] t=268.4s  posted=6482  failed=0  samples=6499087  recent_p95=1603ms  pending=6522
+[run] t=273.5s  posted=6622  failed=0  samples=6637833  recent_p95=1667ms  pending=6662
+[run] t=278.8s  posted=6802  failed=0  samples=6817974  recent_p95=1823ms  pending=6822
+[run] t=284.3s  posted=6982  failed=0  samples=6994362  recent_p95=909ms  pending=7002
+[run] t=290.5s  posted=7042  failed=0  samples=7060112  recent_p95=3777ms  pending=7062
+[run] t=296.3s  posted=7162  failed=0  samples=7176869  recent_p95=1624ms  pending=7182
+[run] t=301.7s  posted=7262  failed=0  samples=7278747  recent_p95=2055ms  pending=7302
+[run] t=307.7s  posted=7382  failed=0  samples=7399979  recent_p95=1043ms  pending=7402
+[run] t=312.9s  posted=7542  failed=0  samples=7552337  recent_p95=1113ms  pending=7562
+[run] t=319.2s  posted=7668  failed=0  samples=7677032  recent_p95=3448ms  pending=7702
+[run] t=324.6s  posted=7802  failed=0  samples=7818738  recent_p95=1841ms  pending=7842
+[run] t=330.6s  posted=7922  failed=0  samples=7938357  recent_p95=1154ms  pending=7942
+[run] t=336.7s  posted=7982  failed=0  samples=8000524  recent_p95=1785ms  pending=8022
+[run] t=342.1s  posted=8102  failed=0  samples=8119927  recent_p95=1713ms  pending=8142
+[run] t=347.3s  posted=8202  failed=0  samples=8220352  recent_p95=2347ms  pending=8242
+[run] t=352.7s  posted=8381  failed=0  samples=8395010  recent_p95=1003ms  pending=8402
+[run] t=357.7s  posted=8542  failed=0  samples=8555159  recent_p95=1787ms  pending=8582
+[run] t=362.8s  posted=8742  failed=0  samples=8746152  recent_p95=400ms  pending=8754
+[run] t=368.0s  posted=8815  failed=0  samples=8822206  recent_p95=1878ms  pending=8862
+[run] t=373.2s  posted=8962  failed=0  samples=8967179  recent_p95=2306ms  pending=8978
+[run] t=378.5s  posted=9137  failed=0  samples=9150446  recent_p95=606ms  pending=9158
+[run] t=383.8s  posted=9318  failed=0  samples=9332856  recent_p95=1348ms  pending=9338
+[run] t=389.3s  posted=9478  failed=0  samples=9492178  recent_p95=1247ms  pending=9498
+[run] t=394.8s  posted=9598  failed=0  samples=9616140  recent_p95=2599ms  pending=9638
+[run] t=400.7s  posted=9741  failed=0  samples=9754302  recent_p95=1604ms  pending=9758
+[run] t=405.9s  posted=9898  failed=0  samples=9911595  recent_p95=1416ms  pending=9938
+[run] t=411.1s  posted=10078  failed=0  samples=10088289  recent_p95=1004ms  pending=10098
+[run] t=416.9s  posted=10281  failed=0  samples=10294361  recent_p95=1612ms  pending=10298
+[run] t=422.1s  posted=10378  failed=0  samples=10377885  recent_p95=3391ms  pending=10398
+[run] t=427.5s  posted=10498  failed=0  samples=10513933  recent_p95=1417ms  pending=10518
+[run] t=432.7s  posted=10698  failed=0  samples=10697405  recent_p95=618ms  pending=10718
+[run] t=438.1s  posted=10817  failed=0  samples=10834387  recent_p95=970ms  pending=10858
+[run] t=443.1s  posted=10938  failed=0  samples=10953199  recent_p95=1435ms  pending=10978
+[run] t=448.2s  posted=11158  failed=0  samples=11160263  recent_p95=111ms  pending=11178
+[run] t=453.3s  posted=11308  failed=0  samples=11286588  recent_p95=2021ms  pending=11338
+[run] t=458.5s  posted=11458  failed=0  samples=11470789  recent_p95=1095ms  pending=11478
+[run] t=464.4s  posted=11618  failed=0  samples=11635658  recent_p95=2251ms  pending=11638
+[run] t=469.9s  posted=11778  failed=0  samples=11791234  recent_p95=1499ms  pending=11798
+[run] t=476.9s  posted=11878  failed=0  samples=11893932  recent_p95=3471ms  pending=11918
+[run] t=482.6s  posted=11978  failed=0  samples=11994312  recent_p95=2093ms  pending=11998
+[run] t=487.6s  posted=12185  failed=0  samples=12184490  recent_p95=417ms  pending=12185
+[run] t=493.0s  posted=12334  failed=0  samples=12343593  recent_p95=2047ms  pending=12385
+[run] t=498.3s  posted=12485  failed=0  samples=12501933  recent_p95=1838ms  pending=12525
+[run] t=503.5s  posted=12625  failed=0  samples=12638842  recent_p95=1199ms  pending=12645
+[run] t=508.6s  posted=12805  failed=0  samples=12804958  recent_p95=783ms  pending=12825
+[run] t=513.8s  posted=12983  failed=0  samples=12988355  recent_p95=2230ms  pending=13005
+[run] t=520.6s  posted=13090  failed=0  samples=13089273  recent_p95=5936ms  pending=13125
+[run] t=526.2s  posted=13184  failed=0  samples=13183900  recent_p95=3521ms  pending=13205
+[run] t=531.5s  posted=13284  failed=0  samples=13299752  recent_p95=1810ms  pending=13325
+[run] t=536.9s  posted=13445  failed=0  samples=13442460  recent_p95=519ms  pending=13445
+[run] t=542.8s  posted=13585  failed=0  samples=13601072  recent_p95=2038ms  pending=13605
+[run] t=547.9s  posted=13785  failed=0  samples=13784836  recent_p95=519ms  pending=13805
+[run] t=553.7s  posted=13921  failed=0  samples=13940194  recent_p95=3347ms  pending=13945
+[run] t=559.3s  posted=14045  failed=0  samples=14061287  recent_p95=1432ms  pending=14065
+[run] t=564.5s  posted=14225  failed=0  samples=14239315  recent_p95=912ms  pending=14245
+[run] t=569.7s  posted=14405  failed=0  samples=14421998  recent_p95=1271ms  pending=14445
+[run] t=575.5s  posted=14505  failed=0  samples=14504643  recent_p95=3917ms  pending=14525
+[run] t=580.7s  posted=14643  failed=0  samples=14655839  recent_p95=1011ms  pending=14665
+[run] t=585.7s  posted=14784  failed=0  samples=14798983  recent_p95=1344ms  pending=14825
+[run] t=591.2s  posted=14885  failed=0  samples=14902789  recent_p95=2838ms  pending=14925
+[run] t=596.5s  posted=15065  failed=0  samples=15078572  recent_p95=1062ms  pending=15085
+[run] t=602.0s  posted=15224  failed=0  samples=15240862  recent_p95=1767ms  pending=15265
+[run] t=607.1s  posted=15405  failed=0  samples=15417728  recent_p95=840ms  pending=15425
+[run] t=612.6s  posted=15624  failed=0  samples=15623977  recent_p95=928ms  pending=15625
+[run] t=617.8s  posted=15785  failed=0  samples=15802032  recent_p95=1440ms  pending=15825
+[run] t=623.0s  posted=15905  failed=0  samples=15921672  recent_p95=1884ms  pending=15945
+[run] t=628.6s  posted=15945  failed=0  samples=15963455  recent_p95=5611ms  pending=15985
+[run] t=633.9s  posted=16125  failed=0  samples=16138389  recent_p95=1145ms  pending=16145
+[run] t=639.2s  posted=16245  failed=0  samples=16260291  recent_p95=1202ms  pending=16265
+[run] t=645.1s  posted=16369  failed=0  samples=16382358  recent_p95=2635ms  pending=16385
+[run] t=650.7s  posted=16505  failed=0  samples=16522318  recent_p95=2054ms  pending=16545
+[run] t=656.4s  posted=16645  failed=0  samples=16662446  recent_p95=1647ms  pending=16665
+[run] t=662.0s  posted=16805  failed=0  samples=16818808  recent_p95=1282ms  pending=16825
+[run] t=667.2s  posted=16945  failed=0  samples=16961895  recent_p95=1666ms  pending=16985
+[run] t=672.4s  posted=17085  failed=0  samples=17098169  recent_p95=1699ms  pending=17125
+[run] t=677.6s  posted=17260  failed=0  samples=17263788  recent_p95=829ms  pending=17285
+[run] t=683.1s  posted=17385  failed=0  samples=17402274  recent_p95=882ms  pending=17425
+[run] t=688.7s  posted=17525  failed=0  samples=17540635  recent_p95=1914ms  pending=17545
+[run] t=697.2s  posted=17665  failed=0  samples=17680868  recent_p95=5665ms  pending=17705
+[run] t=703.0s  posted=17765  failed=0  samples=17780265  recent_p95=1625ms  pending=17785
+[run] t=708.2s  posted=17885  failed=0  samples=17901218  recent_p95=1366ms  pending=17925
+[run] t=713.4s  posted=18045  failed=0  samples=18059974  recent_p95=1387ms  pending=18065
+[run] t=718.9s  posted=18225  failed=0  samples=18239716  recent_p95=1156ms  pending=18245
+[run] t=724.9s  posted=18385  failed=0  samples=18402274  recent_p95=1766ms  pending=18405
+[run] t=730.4s  posted=18525  failed=0  samples=18540393  recent_p95=1779ms  pending=18545
+[run] t=735.5s  posted=18665  failed=0  samples=18681749  recent_p95=1498ms  pending=18705
+[run] t=740.9s  posted=18825  failed=0  samples=18839205  recent_p95=1113ms  pending=18845
+[run] t=746.5s  posted=19005  failed=0  samples=19020575  recent_p95=1962ms  pending=19045
+[run] t=751.7s  posted=19125  failed=0  samples=19138620  recent_p95=1402ms  pending=19165
+[run] t=757.4s  posted=19245  failed=0  samples=19263048  recent_p95=2697ms  pending=19285
+[run] t=762.7s  posted=19365  failed=0  samples=19379484  recent_p95=993ms  pending=19385
+[run] t=768.4s  posted=19504  failed=0  samples=19520753  recent_p95=1542ms  pending=19525
+[run] t=775.4s  posted=19585  failed=0  samples=19585000  recent_p95=5667ms  pending=19605
+[run] t=780.5s  posted=19725  failed=0  samples=19741265  recent_p95=1657ms  pending=19765
+[run] t=786.0s  posted=19844  failed=0  samples=19860247  recent_p95=2298ms  pending=19885
+[run] t=791.7s  posted=20027  failed=0  samples=20042537  recent_p95=1910ms  pending=20045
+[run] t=797.0s  posted=20125  failed=0  samples=20139045  recent_p95=567ms  pending=20145
+[run] t=802.3s  posted=20285  failed=0  samples=20297185  recent_p95=1114ms  pending=20305
+[run] t=807.8s  posted=20485  failed=0  samples=20498689  recent_p95=1127ms  pending=20505
+[run] t=827.2s  posted=20605  failed=0  samples=20624523  recent_p95=17094ms  pending=20645
+[run] t=833.6s  posted=20625  failed=0  samples=20644782  recent_p95=22821ms  pending=20665
+[run] t=853.4s  posted=20665  failed=0  samples=20684800  recent_p95=17136ms  pending=20705
+[run] t=859.6s  posted=20685  failed=0  samples=20703853  recent_p95=6105ms  pending=20725
+[run] t=864.7s  posted=20763  failed=0  samples=20778773  recent_p95=1616ms  pending=20805
+[run] t=870.3s  posted=20945  failed=0  samples=20959560  recent_p95=644ms  pending=20965
+[run] t=875.8s  posted=21085  failed=0  samples=21102132  recent_p95=1766ms  pending=21105
+[run] t=880.8s  posted=21271  failed=0  samples=21273252  recent_p95=852ms  pending=21293
+[run] t=886.0s  posted=21397  failed=0  samples=21412761  recent_p95=2402ms  pending=21445
+[run] t=891.1s  posted=21498  failed=0  samples=21502434  recent_p95=5090ms  pending=21525
+[run] t=896.7s  posted=21665  failed=0  samples=21677374  recent_p95=1182ms  pending=21685
+[run] t=913.2s  posted=21745  failed=0  samples=21761137  recent_p95=14851ms  pending=21785
+[run] t=920.7s  posted=21767  failed=0  samples=21784833  recent_p95=21540ms  pending=21805
+[run] t=925.8s  posted=21865  failed=0  samples=21880482  recent_p95=1265ms  pending=21905
+[run] t=931.7s  posted=22045  failed=0  samples=22062563  recent_p95=2008ms  pending=22065
+[run] t=936.8s  posted=22225  failed=0  samples=22223093  recent_p95=500ms  pending=22245
+[run] t=949.4s  posted=22285  failed=0  samples=22298565  recent_p95=11062ms  pending=22325
+[run] t=956.0s  posted=22325  failed=0  samples=22343457  recent_p95=6564ms  pending=22345
+[run] t=961.6s  posted=22513  failed=0  samples=22527061  recent_p95=1313ms  pending=22533
+[run] t=978.3s  posted=22694  failed=0  samples=22696962  recent_p95=12469ms  pending=22713
+[run] t=983.4s  posted=22701  failed=0  samples=22716832  recent_p95=5012ms  pending=22753
+[run] t=1014.7s  posted=22725  failed=0  samples=22728969  recent_p95=48323ms  pending=22773
+[run] t=1053.4s  posted=22757  failed=0  samples=22757000  recent_p95=74192ms  pending=22793
+[run] t=1059.0s  posted=22801  failed=0  samples=22819538  recent_p95=75584ms  pending=22853
+[run] t=1064.4s  posted=22933  failed=0  samples=22949367  recent_p95=1971ms  pending=22973
+[run] t=1078.9s  posted=23013  failed=0  samples=23029954  recent_p95=11043ms  pending=23053
+[run] t=1086.7s  posted=23033  failed=0  samples=23052415  recent_p95=18811ms  pending=23073
+[run] t=1092.4s  posted=23073  failed=0  samples=23091541  recent_p95=1410ms  pending=23113
+[run] t=1098.3s  posted=23193  failed=0  samples=23210025  recent_p95=2019ms  pending=23213
+[run] t=1106.6s  posted=23213  failed=0  samples=23227481  recent_p95=8903ms  pending=23253
+[run] t=1118.5s  posted=23253  failed=0  samples=23253000  recent_p95=16607ms  pending=23273
+[run] t=1139.4s  posted=23353  failed=0  samples=23371133  recent_p95=16793ms  pending=23373
+[run] t=1146.2s  posted=23373  failed=0  samples=23392730  recent_p95=22865ms  pending=23413
+
+<--- Last few GCs --->
+
+[2925:0x7761000]  1240140 ms: Mark-Compact 4046.3 (4131.2) -> 4030.5 (4131.4) MB, pooled: 2 MB, 3984.39 / 0.00 ms  (average mu = 0.079, current mu = 0.035) allocation failure; scavenge might not succeed
+[2925:0x7761000]  1244203 ms: Mark-Compact 4046.3 (4131.4) -> 4030.6 (4131.4) MB, pooled: 2 MB, 3944.93 / 0.00 ms  (average mu = 0.054, current mu = 0.029) allocation failure; scavenge might not succeed
+
+
+<--- JS stacktrace --->
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0xe42d60 node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/usr/bin/node]
+ 2: 0x121ded0 v8::Utils::ReportOOMFailure(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/usr/bin/node]
+ 3: 0x121e1a7 v8::internal::V8::FatalProcessOutOfMemory(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/usr/bin/node]
+ 4: 0x144d015  [/usr/bin/node]
+ 5: 0x144d043  [/usr/bin/node]
+ 6: 0x146611a  [/usr/bin/node]
+ 7: 0x14692e8  [/usr/bin/node]
+ 8: 0x1cd07a1  [/usr/bin/node]
