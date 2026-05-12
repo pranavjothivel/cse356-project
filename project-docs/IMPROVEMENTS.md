@@ -74,7 +74,3 @@ The `messages-coordinator` is the synchronization point: a `POST /api/messages` 
 
 - **Per-macroservice mTLS** via a service mesh (Linkerd / Istio) so a compromise in one service doesn't trivially extend to another.
 - **Replace the secured impersonation endpoint with a properly-scoped grading-service principal** — today the load-generator-debug endpoint is gated by an out-of-band shared secret, which works for a term project but isn't the long-term shape.
-
----
-
-The above is a sketch, not a commitment. The point is that the current build is shaped by *learning what scales* on a fixed VM cluster in 4 weeks; the next build would be shaped by *operating something the team can hand off*. Different goals, different architecture.
