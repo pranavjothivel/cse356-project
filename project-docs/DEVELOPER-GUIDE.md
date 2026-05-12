@@ -147,14 +147,12 @@ Pub/sub fanout overload on Redis-02. The fix is structural (per-worker channels 
 `deploy-lb-configs` reloads HAProxy after a deploy, which **wipes runtime `state ready` overrides**. If you marked a backend `disabled` in the config and re-enabled it via socket, the reload reverts. The fix: don't ship new backends as `disabled` in the config; rely on the default health-check window to hold them DOWN until they pass. See `feedback_haproxy_runtime_state_lost_on_reload` in the memory store, and the parked-pool comments in `infra/haproxy/haproxy.cfg`.
 
 ### "Logged in but no presence updates"
-The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The headless API-driven load generator clients hit this bug too — see [`claude-docs/performance-tuning.md`](../claude-docs/performance-tuning.md) Fix 3.
+The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The headless API-driven load generator clients have hit this bug too — the client-side fix is a one-time pre-filter on the raw WebSocket message event that holds the connect Promise unresolved until the exact frame `"ready"` arrives.
 
 ### `sendMessage` returning 403 "not a channel member" right after a successful join
 Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was traced to the load generator silently treating failed `POST /api/communities/:id/join` responses (500 under load) as successful, then attempting `sendMessage` as a non-member. The fix landed on the course side (the load generator was updated to surface join errors explicitly). A temporary fall-back in `sendMessage` that auto-joined the user on a missing-membership lookup was used during the incident window and then reverted once the upstream patch was deployed. If a similar pattern reappears, first confirm whether the client is correctly distinguishing success from failure on the join call before reaching for a server-side workaround.
 
 ## Known issues / future improvements
-
-From [`claude-docs/pending-fixes.md`](../claude-docs/pending-fixes.md) and our own observation:
 
 - **Load-generator client / server URL drift**. The generated client expects `GET /api/unread` (we exposed `/api/conversations/unread`). The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
 - **Community find-or-create**. Duplicate-name `POST /communities` currently returns 409 + the existing community ID; the outage monitor doesn't handle 409 and keeps reporting failure. Proposed fix: auto-join on duplicate name.

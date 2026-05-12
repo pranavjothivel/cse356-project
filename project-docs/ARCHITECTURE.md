@@ -69,7 +69,7 @@ At our scale (single-digit-million messages by end of project), Postgres FTS wit
 
 ### Why MinIO instead of NFS
 
-The early plan in `claude-docs/architecture.md` was an NFS mount. We switched to MinIO because:
+The early plan was an NFS mount. We switched to MinIO because:
 - S3-compatible API is a stable abstraction (clients are SDK-based, not filesystem-bound).
 - MinIO can be scaled / replicated independently of the app nodes.
 - LB serves `/minio/*` to clients via Nginx proxy without app-node involvement, just like NFS would have.

@@ -6,7 +6,7 @@
 - **GitHub** for code review and async work. PRs were the unit of work; issues were used loosely (more often a Discord message escalating into a PR). The git history is the canonical record of who shipped what.
 - **Grafana + Sentry** as the operational eye. Sentry was used until its overhead outweighed the value (mid-April); Grafana Cloud (Loki + Prometheus, fed by Alloy on the telemetry node) and Axiom (HAProxy access-log tail via Vector) persisted to the end.
 - **Work was distributed by claim**, not assigned. When a deadline or a new bottleneck surfaced, whichever member had the most context volunteered. Hard rolling-deploy / infra work tended to converge on whoever had paged-in production state recently.
-- **Deadlines** were structured around 4/13 Go Live and the 4-week Test Traffic Period that followed (the load generator simulating real end-users continuously). Most feature work was completed well before Go Live to leave the Test Traffic Period for chasing bugs that the pre-Live API tests didn't surface under real-world load. Capacity analyses (e.g. [`claude-docs/peak-capacity-2026-05-04.md`](../claude-docs/peak-capacity-2026-05-04.md)) bracketed each push.
+- **Deadlines** were structured around 4/13 Go Live and the 4-week Test Traffic Period that followed (the load generator simulating real end-users continuously). Most feature work was completed well before Go Live to leave the Test Traffic Period for chasing bugs that the pre-Live API tests didn't surface under real-world load. Capacity analyses written when bottlenecks shifted bracketed each push.
 
 ---
 
@@ -84,5 +84,5 @@
 ## Coordination summary
 
 - **Communication**: Discord (primary), GitHub PRs (code review), Grafana Cloud / Sentry / Axiom alerts (incident detection).
-- **Progress tracking**: continuous monitoring of metrics and latencies on the course grading portal alongside our own instrumentation data (Grafana Cloud dashboards fed by Alloy on the telemetry node; HAProxy `/stats`; Axiom for access-log tail). Per-incident postmortems (e.g. [`claude-docs/incident-2026-04-13-504s.md`](../claude-docs/incident-2026-04-13-504s.md)); capacity analyses written when bottlenecks shifted ([`claude-docs/peak-capacity-2026-05-04.md`](../claude-docs/peak-capacity-2026-05-04.md)).
+- **Progress tracking**: continuous monitoring of metrics and latencies on the course grading portal alongside our own instrumentation data (Grafana Cloud dashboards fed by Alloy on the telemetry node; HAProxy `/stats`; Axiom for access-log tail). Per-incident postmortems and capacity analyses written when bottlenecks shifted.
 - **Deadlines**: the hard deadline was **4/13 "Go Live"**, after which the load generator ran continuously as simulated real end-users for the 4-week **Test Traffic Period**. We finished the majority of feature work well before Go Live so the team could spend the rest of the window catching bugs that the pre-Live API tests didn't reveal under real-world traffic patterns. The "what's the binding constraint right now" framing drove each new round of work during the Test Traffic Period rather than discrete milestone deadlines.

@@ -67,7 +67,7 @@ All OAuth/OIDC callback URLs use the `/api/auth/...` prefix (HAProxy routes by `
 |---|---|
 | `AXIOM_TOKEN`, `AXIOM_DATASET`, `SENTRY_DSN` | Currently disabled in production after a perf-vs-value tradeoff (`7149649`); kept in code path for re-enable. |
 
-A reference `.env` template lives at [`server/.env.example`](../server/.env.example) (sanitized prod structure with placeholder values); long-form per-variable notes are in [`claude-docs/env_structure.md`](../claude-docs/env_structure.md).
+A reference `.env` template lives at [`server/.env.example`](../server/.env.example) — sanitized prod structure with placeholder values; every required key is present.
 
 ## Building & running locally
 
