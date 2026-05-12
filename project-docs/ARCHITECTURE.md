@@ -117,6 +117,6 @@ Production runs `sequelize.sync()` *without* `alter` (deliberately — `alter:tr
 | Redis-01 | `group1-db-redis-01` | Sessions, cache, presence, mutex. |
 | Redis-02 | `group1-db-redis-02` | Pub/sub fanout only. |
 | Object store | MinIO (currently colocated on `lb01`) | Attachments. |
-| Telemetry | `group1-telemetry-01` | Grafana Alloy receiver — aggregates logs + metrics from every node and **forwards to Grafana Cloud** (Loki for logs, Prometheus/Mimir for metrics, hosted Grafana dashboards). HAProxy access logs additionally stream to Axiom via Vector for live tail during incidents. |
+| Telemetry | `group1-telemetry-01` | Grafana Alloy receiver — aggregates logs + metrics from every node and **forwards to Grafana Cloud** (Loki for logs, Prometheus/Mimir for metrics, hosted Grafana dashboards). HAProxy access logs additionally stream to Axiom via Vector for live tail during incidents. **Sentry** captures any unhandled exception thrown by an app worker, with the stack trace and request context, so errors that don't bubble up as a non-2xx response are still surfaced — currently disabled in the live codepath after a perf/value tradeoff but the integration is in place. |
 
 Full IP and sizing details in [`infra/README.md`](../infra/README.md) and [`infra/nodes.yml`](../infra/nodes.yml).
