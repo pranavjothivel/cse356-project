@@ -24,7 +24,7 @@ Exit code is `0` if every check passes, non-zero otherwise. Failures print a nor
 | # | Check | Why |
 |---|---|---|
 | 1 | `GET /` → `200` | LB → Nginx → SPA bundle path is alive. |
-| 2 | `GET /api/me` (unauthenticated) → `401` | Auth middleware mounted; missing-session path returns the documented status. |
+| 2 | `GET /api/auth/me` (unauthenticated) → `401` | Auth middleware mounted; missing-session path returns the documented status. |
 | 3 | `GET /api/communities` (unauthenticated) → `401` | API pool routing through HAProxy `/api/*` ACL works. |
 | 4 | `GET /api/auth/google` → `302` to `accounts.google.com` | OAuth redirect leg is wired. |
 | 5 | WebSocket upgrade against `/api?token=__smoke__` → handshake completes | LB's WS upgrade ACL routes to the WS pool. |

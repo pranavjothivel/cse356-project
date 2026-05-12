@@ -179,7 +179,7 @@ systemctl restart pgbouncer
 
 Verification layers, lightest to heaviest:
 
-- **Smoke tests** — Jest-based black-box suite under [`smoke-tests/`](../smoke-tests/). Verifies the SPA bundle serves, `/api/me` returns 401 unauthenticated, `/api/communities` returns 401 unauthenticated (also confirms the API-pool routing), the Google OAuth redirect is wired, and the WebSocket upgrade ACL routes to the WS pool. Exits non-zero on any failure — safe to run from CI or as a post-deploy gate.
+- **Smoke tests** — Jest-based black-box suite under [`smoke-tests/`](../smoke-tests/). Verifies the SPA bundle serves, `/api/auth/me` returns 401 unauthenticated, `/api/communities` returns 401 unauthenticated (also confirms the API-pool routing), the Google OAuth redirect is wired, and the WebSocket upgrade ACL routes to the WS pool. Exits non-zero on any failure — safe to run from CI or as a post-deploy gate.
 
   ```bash
   cd smoke-tests

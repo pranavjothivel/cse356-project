@@ -20,8 +20,8 @@ describe(`Smoke checks against ${TARGET}`, () => {
     expect(res.status).toBe(200);
   });
 
-  test('API auth-required path returns 401 unauthenticated — GET /api/me', async () => {
-    const res = await fetch(`${TARGET}/api/me`, fetchOpts());
+  test('API auth-required path returns 401 unauthenticated — GET /api/auth/me', async () => {
+    const res = await fetch(`${TARGET}/api/auth/me`, fetchOpts());
     expect(res.status).toBe(401);
   });
 
