@@ -1,0 +1,59 @@
+%% Production topology — cse356 messaging system.
+%% Components: HAProxy LB layer, API pool, WS pool, Redis 01 (sessions/cache/presence),
+%% Redis 02 (pub/sub fanout), PostgreSQL.
+flowchart TB
+    Clients["Clients<br/>(browser SPA)"]
+
+    subgraph LB["HAProxy LB layer"]
+        direction LR
+        LB01["group1-web-lb01"]
+        LB02["group1-lb-02"]
+    end
+
+    subgraph API["API pool — WORKER_ROLE=http/all"]
+        direction LR
+        API1["api-node-01"]
+        API2["api-node-02"]
+        API3["api-node-03"]
+        APIHTTP["api-node-http-01"]
+    end
+
+    subgraph WS["WS pool — WORKER_ROLE=ws, uWebSockets.js :3001"]
+        direction LR
+        WS04["api-node-04"]
+        WS05["api-node-05"]
+        WS06["api-node-06"]
+        WS07["api-node-07"]
+    end
+
+    subgraph Stores["Shared state"]
+        direction LR
+        PG[("PostgreSQL<br/>psql-01<br/>(via PgBouncer)")]
+        R1[("Redis 01<br/>redis-01<br/>sessions • cache • presence")]
+        R2[("Redis 02<br/>redis-02<br/>pub/sub fanout")]
+    end
+
+    Clients -- HTTPS / WSS --> LB
+    LB -- /api/* --> API
+    LB -- WS upgrade --> WS
+
+    API -- SQL --> PG
+    WS  -- SQL --> PG
+
+    API -- sessions / cache / presence --> R1
+    WS  -- presence --> R1
+
+    API -- PUBLISH --> R2
+    WS  -- SUBSCRIBE --> R2
+
+    classDef lb fill:#fde68a,stroke:#b45309,stroke-width:1px,color:#000
+    classDef api fill:#bfdbfe,stroke:#1d4ed8,stroke-width:1px,color:#000
+    classDef ws fill:#bbf7d0,stroke:#15803d,stroke-width:1px,color:#000
+    classDef store fill:#f3e8ff,stroke:#7e22ce,stroke-width:1px,color:#000
+    classDef cli fill:#e5e7eb,stroke:#374151,stroke-width:1px,color:#000
+
+    class LB01,LB02 lb
+    class API1,API2,API3,APIHTTP api
+    class WS04,WS05,WS06,WS07 ws
+    class PG,R1,R2 store
+    class Clients cli
