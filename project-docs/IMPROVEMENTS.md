@@ -1,6 +1,6 @@
 # Future Improvements
 
-Where the system is today vs. where it could go next. The first section is the honest list of *known limitations* in the current implementation; the second is a more ambitious roadmap for what we'd do if this were a long-lived product instead of a 4-week term project.
+Where the system is today vs. where it could go next. The first section is the honest list of *known limitations* in the current implementation; the second is a more ambitious roadmap for what we'd do if this were a long-lived product.
 
 ---
 
@@ -81,7 +81,8 @@ The macroservices only need to agree on the wire protocol (gRPC + protobuf, see 
 
 - **`auth`** — keep Node but swap Express for **[Fastify](https://fastify.dev)**. JSON-Schema-validated routes, faster per-request CPU on the framework hot path, and a stricter contract make sense for a high-volume, security-sensitive public endpoint where you actually want to reject malformed input at the door.
 - **`messages-pubsub` and `presence-pubsub`** — **Go**. Goroutine-per-connection is cheap (a few KB per goroutine vs. Node's per-callback closure footprint), the M:N scheduler keeps thousands of idle WS connections off the hot path, and the broadcast-fanout workload maps cleanly onto Go's concurrency primitives (`sync.Map` for the connection registry, buffered channels for per-worker fanout, `context.Context` for deadline propagation).
-- **`messages-coordinator`, `storage`** — Node/TS is fine; async orchestration and DB/cache I/O are what Node excels at. If `storage` ever becomes a write-throughput bottleneck, **Rust** with `sqlx` + `redis-rs` is the cleanest GC-pause-free fallback.
+- **`messages-coordinator`** — Node/TS; async orchestration of three concurrent RPCs is exactly what Node excels at.
+- **`storage`** — **Rust** with `sqlx` + `redis-rs` is the right primary choice: zero-GC pauses on the hot write path, fearless concurrency for the write-through cache layer, and compile-time-checked SQL via `sqlx`'s macro means a malformed query fails the build instead of paging the on-call. Node/TS works as a stopgap if the team needs a faster initial implementation and write throughput hasn't yet become binding.
 - **`search`** — driven by the engine's SDK quality; Node or Go both work for Elasticsearch / Meilisearch.
 
 The invariant is the gRPC contract — internal callers don't know or care what language a service is written in. The browser-facing edge stays uniform REST + WS regardless.
