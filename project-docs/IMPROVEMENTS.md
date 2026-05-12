@@ -54,6 +54,21 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 - **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
 - **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
 
+##### Preserving per-session logout
+
+The project spec requires that signing out of one session does *not* sign the user out of their other sessions (each login is its own session). The recommended shape preserves this naturally because the session cookie still backs every browser session at the edge:
+
+1. Login → one session row in Redis-01, one cookie issued. Same as today.
+2. Browser sends the cookie → Gateway resolves it against Redis-01 → exchanges for a short-lived JWT for downstream RPCs.
+3. Logout-on-one-device → Gateway deletes *that* session row.
+4. The now-invalid cookie → Gateway lookup misses → `401`. The user's *other* sessions still resolve their own cookies to their own (still-valid) Redis rows.
+
+The wrinkle is the JWT's own TTL: a JWT minted moments before logout stays valid for the remaining 5–15 min, since downstream services verify by signature alone. Three ways to handle that window:
+
+- **Accept the small window.** For a chat app, ≤15 min of stale auth on one logged-out device is acceptable; nothing privileged is gated behind freshness this fine-grained.
+- **Per-request `jti` blacklist.** Write the JWT's `jti` (token-ID) claim into a `revoked-tokens` set in Redis-01 on logout; every downstream service checks the set. Correct but puts Redis back on every hop, defeating part of the JWT win.
+- **Bind the JWT to the session_id (recommended).** Each JWT carries the issuing session's ID as a claim. The Gateway refuses to mint *new* JWTs for a revoked session because the lookup misses; existing JWTs naturally expire within TTL. No per-request Redis lookup, but the in-flight JWTs cap any logged-out window at the TTL.
+
 ##### Does this make `auth` a single point of failure?
 
 *Issuing* tokens and *validating* tokens are two different paths, and under the recommended shape `auth` only sits on the issuing one (login + token refresh). It does **not** sit on the validation path: the Gateway resolves the session cookie against Redis-01 (one hop, no `auth` involvement); the JWT is verified at every downstream service by signature check against `auth`'s public JWKS, cached locally at each service and refreshed hourly in the background. So:
