@@ -43,7 +43,7 @@ sudo -u deploy pm2 logs --lines 200                      # tail logs
 systemctl reload haproxy                                 # LB config reload
 ```
 
-**Testing:** No unit-test suite. Verification surface = loadgen runs (archived in [`loadgen-reports/`](loadgen-reports/)), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana dashboards on the telemetry node.
+**Testing:** Run [`./smoke-tests/run.sh`](smoke-tests/run.sh) for post-deploy sanity checks (SPA serves, REST routing, OAuth redirect, WS upgrade). Deeper verification: load-generator runs (archived in [`loadgen-reports/`](loadgen-reports/)), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
 
 ## 3. Scaling and Load Handling
 
