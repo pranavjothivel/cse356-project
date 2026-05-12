@@ -22,6 +22,15 @@ Everything below runs on Linodes on the CSE356 course cluster. Full hardware inv
 
 The server reads from `/srv/app/.env` on each app node in production; locally it reads `server/.env`. The CI deploy writes the file from the `ENV_FILE` GitHub secret on every deploy.
 
+For local development, copy [`server/.env.example`](../server/.env.example) to `server/.env` and fill in real values:
+
+```bash
+cp server/.env.example server/.env
+# then edit server/.env with your local DB / Redis / OAuth / MinIO settings
+```
+
+The example file is sanitized (placeholder credentials) but mirrors the structure of the production `.env` exactly, so every required key is present.
+
 ### Required
 
 | Variable | Purpose |
@@ -58,7 +67,7 @@ All OAuth/OIDC callback URLs use the `/api/auth/...` prefix (HAProxy routes by `
 |---|---|
 | `AXIOM_TOKEN`, `AXIOM_DATASET`, `SENTRY_DSN` | Currently disabled in production after a perf-vs-value tradeoff (`7149649`); kept in code path for re-enable. |
 
-A reference `.env` template lives in [`claude-docs/env_structure.md`](../claude-docs/env_structure.md).
+A reference `.env` template lives at [`server/.env.example`](../server/.env.example) (sanitized prod structure with placeholder values); long-form per-variable notes are in [`claude-docs/env_structure.md`](../claude-docs/env_structure.md).
 
 ## Building & running locally
 
@@ -108,7 +117,7 @@ For situations where the fan-out parallel approach is too aggressive (large code
 `deploy.yml` only pushes haproxy/nginx/frontend to `lb01`. Updates to `lb02` are pushed manually per the runbook in [`infra/README.md`](../infra/README.md#deploying-to-both-lbs):
 
 ```bash
-KEY=~/.ssh/id_ed25519_356_clanode_prod
+KEY=<PATH TO CLANODE (OR OTHER CLOUD VPC) SSH KEY>
 
 scp -i $KEY infra/haproxy/haproxy-lb02.cfg root@130.245.136.142:/etc/haproxy/haproxy.cfg
 ssh -i $KEY root@130.245.136.142 'haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy'
@@ -150,14 +159,21 @@ systemctl restart pgbouncer
 
 ## Testing
 
-The project does not have a unit-test suite. Verification was done via:
+Verification layers, lightest to heaviest:
 
-- **Loadgen runs** against the cluster — bot clients in `loadgen-reports/` (the JSON files are run summaries; the corresponding `.log` files have per-request traces).
-- **Manual smoke tests** through the React SPA after each deploy.
+- **Smoke tests** — [`smoke-tests/run.sh`](../smoke-tests/run.sh) hits a target (defaults to the prod LB) and verifies the SPA bundle serves, `/api/me` returns 401 unauthenticated, `/api/communities` returns 401 unauthenticated (also confirms the API-pool routing), the Google OAuth redirect is wired, and the WebSocket upgrade ACL routes to the WS pool. Exits non-zero on any failure — safe to run from CI or as a post-deploy gate.
+
+  ```bash
+  ./smoke-tests/run.sh                              # default = prod LB
+  TARGET=http://localhost:3000 ./smoke-tests/run.sh  # local dev backend
+  ```
+
+- **Manual smoke tests** through the React SPA after each deploy — log in, send a message, open a DM.
+- **Load-generator runs** against the cluster — headless API-driven clients in [`loadgen-reports/`](../loadgen-reports/) (the JSON files are run summaries; the corresponding `.log` files have per-request traces).
 - **TLS-probe** — [`scripts/tls-probe/tls-probe.sh`](../scripts/tls-probe/tls-probe.sh) characterizes LB-side cold-handshake latency over a configurable window. Output CSVs in `loadgen-reports/2026-05-06-tls-probe*.csv`.
-- **Production telemetry** — Grafana dashboards on the telemetry node; HAProxy `/stats`; Sentry for unhandled exceptions (currently disabled in code path).
+- **Production telemetry** — Grafana Cloud dashboards (Loki for logs, Prometheus/Mimir for metrics) fed from the telemetry node via Grafana Alloy; HAProxy `/stats`; Axiom for HAProxy access-log tail; Sentry for unhandled exceptions (Sentry is currently disabled in the codepath, kept for re-enable).
 
-A future improvement would be a small integration-test runner against a dockerized stack. Out of scope for the term project.
+A future improvement would be a dockerized integration test suite that exercises the auth flow + message-send + WS broadcast against an ephemeral PG + Redis stack. Out of scope for the term project.
 
 ## Common operational checks
 
