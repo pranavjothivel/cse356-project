@@ -155,12 +155,11 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    // 'auto' marks the cookie Secure when req.secure is true. With
-    // `trust proxy` set above, that respects HAProxy's
-    // X-Forwarded-Proto header — so HTTPS clients still get a
-    // Secure cookie, but plain-HTTP clients (lb02's :80 frontend)
-    // get a non-Secure cookie they can actually send back.
-    secure: 'auto',
+    // Hardcoded Secure in production. If/when any frontend serves plain
+    // HTTP (e.g. lb02 :80 currently does), this MUST be relaxed to 'auto'
+    // — otherwise the Set-Cookie header is silently dropped on HTTP
+    // requests and login through that frontend presents as "200 then 401".
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
   },
@@ -268,7 +267,12 @@ async function start() {
   // go through server/scripts/migrations instead.
   await sequelize.sync({ alter: process.env.NODE_ENV !== 'production' });
 
-  await setupOidcStrategy();
+  // Fire-and-forget: a thrown error in setupOidcStrategy (e.g. Keycloak
+  // unreachable at boot) would otherwise propagate up and crash the PM2
+  // worker before it can listen, putting the whole node into a restart
+  // loop. OIDC is a degraded-but-optional login path; the rest of the app
+  // should come up.
+  setupOidcStrategy().catch(err => console.error('OIDC setup failed (non-fatal):', err.message));
 
   // Publisher is needed by REST handlers (broadcastToUsers in messages.js
   // etc.) on EVERY node — including api_only nodes that don't accept WS
