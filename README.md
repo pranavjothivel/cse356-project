@@ -2,13 +2,13 @@
 ## Cloud Hosted Real-time Messenging App (Discord-like)
 ### Authors: Pranav Jothivel, Christopher Brinker, Jacky Chen, and Zach Decena
 
-**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, **~98.4 %** uptime across the 4-week project window (10.7 h cumulative downtime over 672 h).
+**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, **~98.3 %** uptime across the 4-week project window (10.7 h cumulative downtime over 624 h).
 
 ---
 
 ## 1. Project Overview
 
-A cloud-hosted, real-time text messaging service supporting both local accounts and OAuth sign-in (Google, GitHub, and a course-provided OpenID Connect provider), with multi-provider account linking and concurrent sessions across devices. Users organize into communities containing admin-managed public and private channels for persistent group chat, and can also hold direct conversations — one-to-one or as group DMs with their own join/leave semantics and ephemeral lifecycle — outside of any community. Each account carries a profile, avatar, and a presence status (online, idle, away, or offline) derived from connection activity, and can post Unicode messages with up to four image attachments that remain editable and deletable, with every change broadcasting to connected clients in real time. The platform also provides full-text search scoped to a community (honoring per-channel access) or to a direct conversation — filterable by author and time range — and tracks read state and read receipts server-side, so unread counts and receipts stay consistent across all of a user's devices.
+A cloud-hosted, real-time text messaging service supporting both local accounts and OAuth sign-in (Google, GitHub, and a course-provided OpenID Connect provider), with multi-provider account linking and concurrent sessions across devices. Users organize into communities containing admin-managed public and private channels for persistent group chat, and can also hold direct conversations — one-to-one or as group DMs with their own join/leave semantics and ephemeral lifecycle — outside of any community. Each account carries a profile, avatar, and a presence status (online, idle, away, or offline) derived from connection activity, and can post Unicode messages with up to four file attachments that remain editable and deletable, with every change broadcasting to connected clients in real time. The platform also provides full-text search scoped to a community (honoring per-channel access) or to a direct conversation — filterable by author and time range — and tracks read state and read receipts server-side, so unread counts and receipts stay consistent across all of a user's devices.
 
 ![Architecture diagram](project-docs/diagrams/architecture.png)
 
@@ -33,7 +33,7 @@ psql "$DATABASE_URL" -f server/scripts/migrations/0007-baseline-schema.sql
 
 **Env vars** (server reads from `server/.env` locally; `/srv/app/.env` in prod): `DATABASE_URL`, `REDIS_URL`, `REDIS_PUBLISH_URL`, `SESSION_SECRET`, `FRONTEND_URL`, `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_ENDPOINT`, plus OAuth provider keys for Google / GitHub / OIDC. Full list: **[project-docs/DEPLOYMENT.md](project-docs/DEPLOYMENT.md)**.
 
-**Production deploy:** GitHub Actions, two pipelines — `deploy.yml` (full parallel deploy on `workflow_dispatch`) and `rolling-hot-deploy.yml` (node-by-node drain → deploy → un-drain). LB02 currently requires a manual push; runbook in [`infra/README.md`](infra/README.md). Detail in **[project-docs/DEPLOYMENT.md](project-docs/DEPLOYMENT.md)**.
+**Production deploy:** GitHub Actions, two pipelines — `deploy.yml` (full parallel deploy on `workflow_dispatch`) and `rolling-hot-deploy.yml` (node-by-node drain → deploy → un-drain). Runbook in [`infra/README.md`](infra/README.md). Detail in **[project-docs/DEPLOYMENT.md](project-docs/DEPLOYMENT.md)**.
 
 **Running operations:** PM2 runs the app cluster on each node under the `deploy` user. Common commands:
 ```bash
@@ -43,11 +43,18 @@ sudo -u deploy pm2 logs --lines 200                      # tail logs
 systemctl reload haproxy                                 # LB config reload
 ```
 
-**Testing:** Run [`./smoke-tests/run.sh`](smoke-tests/run.sh) for post-deploy sanity checks (SPA serves, REST routing, OAuth redirect, WS upgrade). Deeper verification: load-generator runs (archived in [`loadgen-reports/`](loadgen-reports/)), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
+**Testing:** Run the Jest smoke suite for post-deploy sanity checks (SPA serves, REST routing, OAuth redirect, WS upgrade):
+
+```bash
+cd smoke-tests && npm install && npm test       # default target = prod LB
+TARGET=http://localhost:3000 npm test           # local dev backend
+```
+
+Deeper verification: load-generator runs (archived in [`loadgen-reports/`](loadgen-reports/)), manual smoke through the SPA, TLS-probe script in [`scripts/tls-probe/`](scripts/tls-probe/), HAProxy `/stats`, and Grafana Cloud dashboards (Loki/Prometheus, fed via Grafana Alloy on the telemetry node) + Axiom for HAProxy access-log tail.
 
 ## 3. Scaling and Load Handling
 
-The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.4 % uptime across 4 weeks** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
+The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.3 % uptime across 4 weeks** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
 
 | # | Bottleneck | Fix | Effect |
 |---|---|---|---|
@@ -77,7 +84,6 @@ Brief; each has a paragraph in [project-docs/ARCHITECTURE.md](project-docs/ARCHI
 - **PostgreSQL FTS over Elasticsearch** — at our scale, GIN-indexed FTS is plenty and avoids a second stateful service.
 - **MinIO over NFS** — S3-compatible API is a more stable abstraction; LB-side Nginx serves `/minio/*` to clients without involving app nodes.
 - **Distributed mutex on presence** — read-modify-write of the user's presence body is held under a per-user lock to avoid lost updates.
-- **Bcrypt cost 10** (lowered from 12 after a measurable load-test impact on login latency).
 - **All routes under `/api/*`** — HAProxy can route by path prefix unambiguously; WS upgrades are detected by `hdr(Upgrade) -i websocket`, not by path.
 - **Schema discipline** — production runs `sync()` *without* `alter`; schema changes go through numbered SQL files in `server/scripts/migrations/`.
 
@@ -116,7 +122,7 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | **Jacky Chen** | Authentication (local + OAuth), search, attachment system, message-send hot path, HAProxy CPU tuning |
 | **Zach Decena** | Direct conversations (DMs + group DMs), messaging/presence optimization, issue tracking, vertical + horizontal node scaling |
 
-**Communication & process** — primary channel is the team Discord, with Sentry, Grafana Cloud, and Axiom alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. Deadlines were tracked against the course ranking — each ranking snapshot reset the priority queue around "what's the binding constraint now."
+**Communication & process** — primary channel is the team Discord, with Sentry, Grafana Cloud, and Axiom alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. The hard deadline was **4/13 "Go Live"**, after which the load generator simulated real end-users continuously for the 4-week Test Traffic Period. We finished the majority of feature work well before Go Live so the team could spend the rest of the window catching bugs that the pre-Live API tests didn't reveal under real-world traffic patterns; "what's the binding constraint right now" framed each new round of work.
 
 **Full per-member contribution detail with commit citations: [project-docs/TEAM.md](project-docs/TEAM.md).**
 

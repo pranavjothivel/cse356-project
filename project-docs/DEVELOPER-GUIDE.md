@@ -53,7 +53,7 @@ cse356-project/
 │                                 public docs in project-docs/)
 ├── loadgen-reports/           ← archived loadgen run outputs
 ├── scripts/                   ← repo-level scripts (e.g. tls-probe)
-├── smoke-tests/               ← post-deploy sanity checks (run.sh + README)
+├── smoke-tests/               ← Jest-based post-deploy sanity checks
 └── .github/workflows/         ← CI/CD pipelines (deploy.yml, rolling-hot-deploy.yml,
                                  ci.yml, minio-volume-*.yml)
 ```
@@ -106,11 +106,13 @@ Append a block to `infra/nodes.yml` and push. The deploy pipeline picks it up on
 
 The verification surface, lightest to heaviest:
 
-- **Smoke tests** — [`smoke-tests/run.sh`](../smoke-tests/run.sh) hits a target deployment and verifies the SPA, REST routing, OAuth redirect, and WebSocket upgrade all behave. Safe to run from a laptop or as a post-deploy gate; exits non-zero on any failure. See [`smoke-tests/README.md`](../smoke-tests/README.md) for the checklist of checks.
+- **Smoke tests** — Jest-based suite under [`smoke-tests/`](../smoke-tests/). Verifies the SPA, REST routing, OAuth redirect, and WebSocket upgrade all behave. Safe to run from a laptop or as a post-deploy gate; exits non-zero on any failure. See [`smoke-tests/README.md`](../smoke-tests/README.md) for the checklist of checks.
 
   ```bash
-  ./smoke-tests/run.sh                                # default: prod LB
-  TARGET=http://localhost:3000 ./smoke-tests/run.sh    # local dev backend
+  cd smoke-tests
+  npm install                                          # one-time
+  npm test                                             # default: prod LB
+  TARGET=http://localhost:3000 npm test                # local dev backend
   ```
 
 - **Manual smoke** — open the SPA at `https://group1.cse356.compas.cs.stonybrook.edu`, log in, send a message in a community and a DM. Check the per-component sections of [SCALING.md](SCALING.md) for the regression risks that have bitten us before.
@@ -120,7 +122,7 @@ The verification surface, lightest to heaviest:
 - **HAProxy stats** — `:8404/stats` on either LB. Backend column color = health.
 - **Telemetry stack** — Grafana Cloud dashboards (Loki for logs + Prometheus/Mimir for metrics, fed by Grafana Alloy on `group1-telemetry-01`); Axiom for HAProxy access-log tail; Sentry for unhandled exceptions (currently disabled in the codepath, kept for re-enable).
 
-A future improvement would be a dockerized Jest + supertest integration suite covering the auth flow + message-send + WS broadcast against an ephemeral PG + Redis stack. Out of scope for the term project.
+A future improvement would be expanding the existing Jest suite into a full integration pass (auth flow + message-send + WS broadcast) against an ephemeral PG + Redis stack.
 
 ## Debugging common problems
 
@@ -147,16 +149,16 @@ Pub/sub fanout overload on Redis-02. The fix is structural (per-worker channels 
 ### "Logged in but no presence updates"
 The init race: `enableRealtime()` may resolve when the WS opens at the TCP level, **before** the server's async init finishes and sends the `"ready"` frame. Clients must await the literal string `"ready"` from the server before sending. The headless API-driven load generator clients hit this bug too — see [`claude-docs/performance-tuning.md`](../claude-docs/performance-tuning.md) Fix 3.
 
+### `sendMessage` returning 403 "not a channel member" right after a successful join
+Historical incident, 2026-04-15. A surge of 403s on `POST /api/messages` was traced to the load generator silently treating failed `POST /api/communities/:id/join` responses (500 under load) as successful, then attempting `sendMessage` as a non-member. The fix landed on the course side (the load generator was updated to surface join errors explicitly). A temporary fall-back in `sendMessage` that auto-joined the user on a missing-membership lookup was used during the incident window and then reverted once the upstream patch was deployed. If a similar pattern reappears, first confirm whether the client is correctly distinguishing success from failure on the join call before reaching for a server-side workaround.
+
 ## Known issues / future improvements
 
 From [`claude-docs/pending-fixes.md`](../claude-docs/pending-fixes.md) and our own observation:
 
-- **Autograder client / server URL drift**. The generated client expects `GET /api/unread` (we exposed `/api/conversations/unread`). The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
+- **Load-generator client / server URL drift**. The generated client expects `GET /api/unread` (we exposed `/api/conversations/unread`). The server-side fix is to add a `/api/unread` alias that proxies the conversations/unread logic. Also: `POST /api/channels/:id/read` is called by the client with conversation IDs, but the channels handler uses `requireChannelMember`; fall back to conversation-read logic on miss.
 - **Community find-or-create**. Duplicate-name `POST /communities` currently returns 409 + the existing community ID; the outage monitor doesn't handle 409 and keeps reporting failure. Proposed fix: auto-join on duplicate name.
 - **Dual-table FTS** — see [SCALING.md, Bottleneck 2 tradeoff](SCALING.md#bottleneck-2--gin-pending-list-flushes-serializing-inserts). Moving FTS off the write path entirely is the obvious next step beyond `fastupdate=off`.
 - **Read replica** — for `GET /api/messages` / `/api/search` / `/api/communities`. Should roughly double peak rate.
 - **lb02 in deploy pipeline** — currently manual; the pipeline should fan out to both LBs.
-- **AOF on Redis-01** — we disabled RDB to remove the BGSAVE fork pauses (see [SCALING.md, Bottleneck 6](SCALING.md#bottleneck-6--redis-rdb-bgsave-forks-blocking-the-command-thread)). AOF with `appendfsync everysec` would buy persistence without the fork pause; we just haven't switched.
-- **No integration tests** — see "Running tests" above.
-
-If you find yourself reaching for `claude-docs/` to answer a question, the answer probably belongs in here too — please add it.
+- **AOF on Redis-01** — we disabled RDB to remove the BGSAVE fork pauses (see [SCALING.md, Bottleneck 7](SCALING.md#bottleneck-7--redis-rdb-bgsave-forks-blocking-the-command-thread)). AOF with `appendfsync everysec` would buy persistence without the fork pause; we just haven't switched.

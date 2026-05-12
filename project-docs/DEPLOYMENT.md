@@ -108,6 +108,19 @@ Two pipelines, both in `.github/workflows/`:
 
 Auto-deploy was disabled on `main` push (`e11e6ab`) to keep prod stable during the term project window; deploys are now triggered via `workflow_dispatch`.
 
+### Required GitHub Actions secrets
+
+Set under **Settings → Secrets and variables → Actions** on the repo. Both are read by every deploy job.
+
+| Secret | Format | Used for |
+|---|---|---|
+| `SSH_PRIVATE_KEY` | Single-key PEM body, including the `-----BEGIN OPENSSH PRIVATE KEY-----` / `-----END OPENSSH PRIVATE KEY-----` lines. Must correspond to a public key in `deploy@<app-node>:~/.ssh/authorized_keys` (and `root@<lb>:~/.ssh/authorized_keys` for LB pushes). | All SSH/rsync calls from the workflow runners. |
+| `ENV_FILE` | The full contents of `/srv/app/.env` as a single string — same `KEY=value` lines that `server/.env.example` documents, one per line, no surrounding quotes. **Production-secret values** for `DATABASE_URL`, `PG_DIRECT_URL`, `SESSION_SECRET`, `JWT_SECRET`, the OAuth `*_CLIENT_SECRET` keys, `OIDC_CLIENT_SECRET`, `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`, `SENTRY_DSN`, `AXIOM_TOKEN`. | Written verbatim to `/srv/app/.env` on every node on every deploy. |
+
+The structure of `ENV_FILE` mirrors [`server/.env.example`](../server/.env.example) one-to-one; copy that file, replace placeholders with real values, and paste into the GitHub secret. `WORKER_ROLE` is the only key the workflow injects per-node (based on the `ws_only` / `api_only` / `http_only` flags in `infra/nodes.yml`) — set it to `all` in `ENV_FILE` and let the pipeline override.
+
+For local development, no GitHub secrets are involved — copy `server/.env.example` to `server/.env` and fill in dev values directly.
+
 ### `rolling-hot-deploy.yml` — node-by-node deploy
 
 For situations where the fan-out parallel approach is too aggressive (large code changes, mid-incident hot deploys). Walks each app node in sequence: HAProxy drain → wait for connections to bleed off → rsync + `pm2 reload` → poll PM2 health → un-drain → next node. Configurable retry on SSH flake (5 attempts) and a rollback path on PM2 health failure.
@@ -161,11 +174,13 @@ systemctl restart pgbouncer
 
 Verification layers, lightest to heaviest:
 
-- **Smoke tests** — [`smoke-tests/run.sh`](../smoke-tests/run.sh) hits a target (defaults to the prod LB) and verifies the SPA bundle serves, `/api/me` returns 401 unauthenticated, `/api/communities` returns 401 unauthenticated (also confirms the API-pool routing), the Google OAuth redirect is wired, and the WebSocket upgrade ACL routes to the WS pool. Exits non-zero on any failure — safe to run from CI or as a post-deploy gate.
+- **Smoke tests** — Jest-based black-box suite under [`smoke-tests/`](../smoke-tests/). Verifies the SPA bundle serves, `/api/me` returns 401 unauthenticated, `/api/communities` returns 401 unauthenticated (also confirms the API-pool routing), the Google OAuth redirect is wired, and the WebSocket upgrade ACL routes to the WS pool. Exits non-zero on any failure — safe to run from CI or as a post-deploy gate.
 
   ```bash
-  ./smoke-tests/run.sh                              # default = prod LB
-  TARGET=http://localhost:3000 ./smoke-tests/run.sh  # local dev backend
+  cd smoke-tests
+  npm install                                       # one-time
+  npm test                                          # default = prod LB
+  TARGET=http://localhost:3000 npm test             # local dev backend
   ```
 
 - **Manual smoke tests** through the React SPA after each deploy — log in, send a message, open a DM.
@@ -173,7 +188,7 @@ Verification layers, lightest to heaviest:
 - **TLS-probe** — [`scripts/tls-probe/tls-probe.sh`](../scripts/tls-probe/tls-probe.sh) characterizes LB-side cold-handshake latency over a configurable window. Output CSVs in `loadgen-reports/2026-05-06-tls-probe*.csv`.
 - **Production telemetry** — Grafana Cloud dashboards (Loki for logs, Prometheus/Mimir for metrics) fed from the telemetry node via Grafana Alloy; HAProxy `/stats`; Axiom for HAProxy access-log tail; Sentry for unhandled exceptions (Sentry is currently disabled in the codepath, kept for re-enable).
 
-A future improvement would be a dockerized integration test suite that exercises the auth flow + message-send + WS broadcast against an ephemeral PG + Redis stack. Out of scope for the term project.
+A future improvement would be expanding the Jest suite into a full integration test pass — auth flow + message-send + WS broadcast — against an ephemeral PG + Redis stack.
 
 ## Common operational checks
 

@@ -65,7 +65,7 @@ A monolithic worker pays the cost of WS pub/sub deserialization (~180 KB per bro
 
 ### Why PostgreSQL FTS instead of Elasticsearch
 
-At our scale (single-digit-million messages by end of project), Postgres FTS with a GIN index is plenty, and avoids running a second stateful service. We did pay the cost of fighting GIN's `fastupdate` behavior (see SCALING.md, Bottleneck 2) — `fastupdate=off` was a real fix. If the data scale ever crosses ~50M messages, the right answer is probably an async dual-table FTS on the Postgres side, not Elasticsearch.
+At our scale (single-digit-million messages by end of project), Postgres FTS with a GIN index is plenty, and avoids running a second stateful service. We did pay the cost of fighting GIN's `fastupdate` behavior (see SCALING.md, Bottleneck 2) — `fastupdate=off` was a real fix.
 
 ### Why MinIO instead of NFS
 

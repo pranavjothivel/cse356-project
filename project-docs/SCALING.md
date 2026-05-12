@@ -4,7 +4,7 @@
 
 | Peak concurrent connections | Peak message rate | Uptime over 4-week project window |
 |---|---|---|
-| **3.3K** | **218.0 / s** | **~98.4 %** (10.7 h cumulative downtime across 672 h) |
+| **3.3K** | **218.0 / s** | **~98.3 %** (10.7 h cumulative downtime across 624 h) |
 
 These are the final numbers for `group1`. The remainder of this document walks through the bottlenecks we hit on the way there, the evidence we used to identify each one, the change we made, and the effect we measured.
 
