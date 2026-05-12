@@ -28,7 +28,7 @@ If we kept iterating on the system past the term-project window, the next archit
 
 ### Language & type safety
 
-- **Migrate the server from JavaScript to TypeScript.** The client is already TypeScript; aligning the server stops the type information from being lost at the API boundary, makes refactors safer once the codebase grows past one team, and lets us share request/response types across the wire via a generated client or a shared `@cse356/types` package.
+- **Migrate the server from JavaScript to TypeScript.** The client is already TypeScript; aligning the server stops the type information from being lost at the API boundary, makes refactors safer once the codebase grows past one team, and lets us share request/response types across the wire via a shared `@cse356/types` package.
 
 ### Service boundaries — toward macroservices
 
