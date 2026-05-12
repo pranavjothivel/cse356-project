@@ -64,6 +64,17 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 
 Net: `auth` is a failure dependency for login, not for steady-state request validation. K8s replica count + standard JWKS rotation hygiene keep it from being a true SPOF.
 
+##### Handling CPU bursts on the issuing path
+
+The above tackles *availability*. A related but separate concern is *CPU pressure*: `auth` is CPU-bound on the issuing path because of **bcrypt** — at cost 10 each password verify or signup is ~100–150 ms of pure CPU, and bursts of signups or password logins can saturate the service even at moderate request volume. Validation isn't affected (same reason as above — local JWT verify at each downstream service, no `auth` involvement), but issuing degrades.
+
+The macroservice split already buys the most important property: a CPU-saturated `auth` degrades login latency but does *not* degrade message delivery, presence, or any other macroservice. That's the macroservice win. The remaining options apply *within* `auth`:
+
+- **Horizontal scaling on CPU.** bcrypt is embarrassingly parallel — one hash per request, no shared state. K8s HPA targeting ~70 % CPU across N replicas is the cheapest fix; KEDA can scale on queue depth of pending signup/login work for more responsiveness under burst. Each pod's worker count should match `nproc` so bcrypt threads can each claim a core.
+- **Split `auth` further into a control plane + a hash worker pool.** `auth-control` issues JWTs, manages session-cookie state in Redis, handles OAuth callbacks — all light I/O. `auth-hash` is a stateless CPU pool that does nothing but bcrypt verify and signup hashes; scales independently on CPU. `auth-control` calls `auth-hash` over gRPC with a deadline; if `auth-hash` is saturated, `auth-control` returns `429` instead of timing out a TCP connection.
+- **Async signup with deferred hash.** Signup returns `202 Accepted` immediately and enqueues the bcrypt work; the account isn't usable until the hash commits, which is gated on email-verification anyway (link in the welcome email). Decouples signup ack latency from CPU pressure. Doesn't help login bursts — you can't ack a login without verifying the password — but signup-driven bursts are the more common abuse vector.
+- **Passkeys / WebAuthn for new accounts (long-term).** Passkeys are public-key crypto — fast to verify, no CPU-cost dial. Existing password accounts stay supported; new accounts skip bcrypt entirely. Doesn't help today but removes the bottleneck class permanently for tomorrow.
+
 #### Language and runtime choice per macroservice
 
 The macroservices only need to agree on the wire protocol (gRPC + protobuf, see below), so each service can pick the runtime that best fits its workload — there's no rule that says everything has to stay Node + Express because the monolith was.
