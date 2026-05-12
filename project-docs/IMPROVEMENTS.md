@@ -127,6 +127,40 @@ The next-pass replacements, ordered by how much architectural change they requir
 
 The cumulative direction is "treat Redis-as-coordinator as a tax to remove": each step moves synchronization out of Redis and either into atomic Redis-side ops, into the data model itself, or into single-threaded JS event loops where it's free.
 
+#### Data plane: Postgres scaling
+
+Today's single Postgres primary handles every read and every write. Two improvements:
+
+- **Read replicas** via streaming (physical) replication. Read-only endpoints (`GET /api/messages`, `GET /api/search`, `GET /api/communities`, `GET /api/communities/:id/members`) route to the replica pool; writes still go to the primary. Replicas can be scaled horizontally — adding one is a `pg_basebackup` + register-in-config. Expected impact: roughly 2× peak rate by freeing primary CPU for writes.
+- **Read-your-own-writes handling.** Streaming replicas have lag (typically ms, sometimes seconds). Options: route reads issued within N seconds of a write back to the primary; cache-bust the affected keys on write; use `pg_last_wal_replay_lsn()` to wait for replication on critical reads. The `storage` macroservice owns this policy so callers don't have to.
+- **Partition `messages` by `community_id`** if write throughput on the primary outgrows a single node. Each partition gets its own write head and its own GIN index; range queries against `WHERE community_id = ?` prune to one partition.
+
+#### Data plane: Redis scaling and per-workload split
+
+The current two Redis instances each carry multiple workloads. The future architecture splits them by access pattern and lifecycle so each can be scaled and tuned for persistence independently:
+
+| Redis instance | Workload | Persistence | Scaling profile |
+|---|---|---|---|
+| `session-redis` | `connect-redis` sessions; lookup per authenticated request | AOF with `everysec` (losing it logs everyone out) | Primary + read replica, replication for HA |
+| `cache-redis` | Channel members, message bodies, unread counts, user profile cache — rebuildable from PG | None | Primary + 1–2 read replicas to fan out cache reads |
+| `presence-redis` | Per-user presence hash, the mutex (or its lock-free replacement) | None — presence is inherently ephemeral, reconstructs itself on reconnect | Single primary; failover to standby on failure, eat the brief reconnect storm |
+| `pubsub-redis` | Cross-node WS broadcast fanout (today's Redis 02) | None — pub/sub is fire-and-forget | Single primary; app reconnects to standby on failure. Replication doesn't help pub/sub. |
+| `queue-redis` | Work queues for write-behind durable writes, deferred bcrypt, message-coordinator fan-out tracking | AOF with `everysec` (losing queued work = losing user actions) | Redis Streams with consumer groups; horizontally shardable by `XGROUP` per stream |
+
+Within each instance, two scaling axes:
+- **HA / failover** — Redis Sentinel for VM deployments, the operator's leader-election for K8s deployments.
+- **Horizontal scale** — Redis Cluster (hash-slot partitioning) when a single primary's memory or CPU stops being enough. Multi-key ops across hash slots are restricted, so this is selectively useful per workload.
+
+#### Where Postgres + Redis actually run
+
+Three deployment targets for the stateful tier, each with a sensible default:
+
+- **Self-managed VMs (today's Clanode-style model).** Postgres on dedicated VMs with streaming replication to read-replica VMs; PgBouncer in front of each. Redis instances as standalone processes, optionally behind redis-sentinel for HA. Manual or sentinel-driven failover, manual scaling (resize / add replicas via ops runbook). Lowest abstraction overhead and easiest to debug, but the ops burden grows linearly with the cluster.
+- **Self-managed Kubernetes with operators.** Run Postgres via [**CloudNativePG**](https://cloudnative-pg.io/) or **Zalando postgres-operator**; Redis via **redis-operator** or **KubeBlocks**. Operators handle replication topology, leader election, automated backups (WAL shipping to S3-compatible storage), version upgrades, and replica scaling — all declarative via custom resources. Right choice if we self-manage K8s on Clanode-style VMs and want the stateful tier to live by the same GitOps rules as the stateless macroservices.
+- **Managed cloud services.** **RDS** / **Cloud SQL** / **AlloyDB** for Postgres; **ElastiCache** / **Memorystore** for Redis. The cloud provider handles replication, automated failover, point-in-time recovery, version upgrades, parameter-group management. Highest dollar cost per resource, lowest ops-hour cost. Right choice if we're on a hyperscaler — pair it with managed K8s (EKS / GKE / AKS / LKE) for the stateless tier.
+
+The choice mirrors the cluster-bootstrap decision in the deployment section: VMs → either dedicated stateful VMs *or* operators if K8s is already in play; managed cloud → managed everything. Mixing dedicated-stateful-VMs *with* self-managed K8s is what we have today and works fine; it just means stateful upgrades stay manual.
+
 #### Queuing techniques worth considering
 
 - **Per-recipient ordered queues** for fanout — guarantees in-order delivery per channel without forcing a single global order.
