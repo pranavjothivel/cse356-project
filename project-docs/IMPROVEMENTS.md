@@ -25,9 +25,11 @@ These are the items previously listed under "Limitations that remain" in `SCALIN
 
 If we kept iterating on the system past the term-project window, the next architectural pass would look like this.
 
+> **Inspiration.** Much of the direction below — the macroservice decomposition shape, the coordinator-orchestrated write-behind queueing, and the Snowflake-style ID scheme — is informed by the **2026-05-07 lecture on Twitter / X's architecture since inception**: the platform's evolution from a Rails monolith into the storage / search / pubsub macroservice shape it runs today, and the original Snowflake design with locally-assigned worker IDs. The proposal here adapts those patterns to our own scale and constraints rather than copying them.
+
 ### Language & type safety
 
-- **Migrate the server from JavaScript to TypeScript.** The client is already TypeScript; aligning the server stops the type information from being lost at the API boundary, makes refactors safer once the codebase grows past one team, and lets us share request/response types across the wire via a shared `@cse356/types` package.
+- **Migrate the server from JavaScript to TypeScript.** The client is already TypeScript; aligning the server stops the type information from being lost at the API boundary, makes refactors safer once the codebase grows past one team, and lets us share request/response types across the wire via a shared `@group1/types` package.
 
 ### Service boundaries — toward macroservices
 
