@@ -18,6 +18,13 @@ app_nodes:
     type: 8vcpu-16gb
     # Resized 2026-05-05 from 2vcpu-4gb. All 3 API nodes are now uniform.
     api_only: true
+  - name: group1-api-node-http-01
+    ip: 130.245.136.221
+    private_ip: 10.0.1.119
+    type: 8vcpu-16gb
+    # Added to increase HTTP API worker capacity. No WS role; WORKER_ROLE=http
+    # skips WS init, so this node never appears in app_ws_servers.
+    api_only: true
   # 4-node WS pool (04/05/06/07). HAProxy app_ws_servers backend routes
   # WS upgrades here; deploy pipeline injects WORKER_ROLE=ws so app.js
   # skips /api mounts on these nodes.
