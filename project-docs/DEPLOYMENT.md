@@ -112,7 +112,7 @@ Five workflows live under [`.github/workflows/`](../.github/workflows/). Two run
    - `npm ci --omit=dev`.
    - `pm2 reload ecosystem.config.js --update-env` — graceful zero-downtime reload.
    - Injects `WORKER_ROLE` per-node based on the `ws_only` / `api_only` / `http_only` flags in `nodes.yml`.
-3. **`deploy-jobs`** — runs background-job scripts under [`jobs/`](../jobs/) (e.g. the periodic orphan-attachment cleanup) — currently a no-op slot the team can wire into.
+3. **`deploy-jobs`** — syncs the background-job directories under [`jobs/`](../jobs/) to the telemetry node and writes their `.env` files. Currently this deploys [`jobs/redis-cleanup/`](../jobs/redis-cleanup/) — an hourly cron that walks Redis, drops any connection ID whose `conns:{connId}` liveness key has expired, and deletes empty `users:*` rows. Cron entry on the telemetry node fires at minute `:28` every hour.
 4. **`deploy-frontend`** — builds `client/` with Vite (`VITE_BACKEND_URL` injected at build time), rsyncs `client/dist/` to `root@<lb>:/srv/frontend/dist/`.
 5. **`deploy-lb-configs`** — pushes `infra/haproxy/` + `infra/nginx/` to the LB and reloads HAProxy / Nginx via `systemctl reload`. Only runs when those paths changed in the deploy revision.
 

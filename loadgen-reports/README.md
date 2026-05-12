@@ -4,6 +4,10 @@ Archived outputs from our **ad-hoc loadgen runs** — discrete passes the team k
 
 > These are *our* runs. They are **not** the course grading load generator's traffic, which we did not control. See [`project-docs/SCALING.md`](../project-docs/SCALING.md#how-we-measured) for the distinction between the two.
 
+## How to read the numbers in this folder
+
+These runs are best understood as **point-in-time, best-effort captures** rather than tightly controlled before/after benchmarks. Cluster state across runs differed in cache warmth, accumulated DB rows, ongoing background load (Test Traffic was running for some captures and not others), and in at least one case an in-process instrumentation hot-patch was toggled between consecutive runs. The numbers are useful as **directional evidence** — the trends, the order-of-magnitude shifts, and the shape of the per-window timeline reflect real changes in the system — but the absolute latencies should be interpreted as representative rather than as controlled-experiment measurements. Where a specific report is cited in `SCALING.md` it's because it materially demonstrates the bottleneck's effect, not because we believe the headline number is reproducible to the millisecond.
+
 ## File naming
 
 ```

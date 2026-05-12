@@ -56,6 +56,8 @@ cse356-project/
 │                                (not the course grading load generator — that's external)
 ├── scripts/                   ← repo-level scripts (e.g. tls-probe)
 ├── smoke-tests/               ← Jest-based post-deploy sanity checks
+├── jobs/                      ← scheduled jobs deployed to the telemetry node
+│   └── redis-cleanup/         ← hourly cron — garbage-collects stale conns:* / users:* keys
 └── .github/workflows/         ← CI/CD pipelines (deploy.yml, rolling-hot-deploy.yml,
                                  ci.yml, minio-volume-*.yml)
 ```
