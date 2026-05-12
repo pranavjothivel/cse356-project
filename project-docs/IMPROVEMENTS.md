@@ -54,6 +54,16 @@ In a macroservice world the tradeoff shifts. Each cross-service RPC either re-ve
 - **Con JWT** — revocation is harder. A logout / forced-revoke needs a short token TTL (5–15 min) plus an in-memory blacklist of revoked-but-not-yet-expired token IDs at every service. Token payload is bigger than a session ID — worth measuring against the 4 KB cookie limit.
 - **Recommended shape** — keep the session cookie at the browser edge for backwards compatibility and for the cleanest CSRF story; at the Gateway API, **exchange** the session cookie for a short-lived JWT and inject it into downstream RPCs. Revocation handled by short TTL plus a `revoked-tokens` set in Redis-01 (TTL matching the longest token lifetime). Browser-facing auth flow stays unchanged; internal services stop touching Redis for every hop.
 
+##### Does this make `auth` a single point of failure?
+
+*Issuing* tokens and *validating* tokens are two different paths, and under the recommended shape `auth` only sits on the issuing one (login + token refresh). It does **not** sit on the validation path: the Gateway resolves the session cookie against Redis-01 (one hop, no `auth` involvement); the JWT is verified at every downstream service by signature check against `auth`'s public JWKS, cached locally at each service and refreshed hourly in the background. So:
+
+- `auth` down for **minutes**: no new logins, but existing sessions still work and all in-flight requests still verify.
+- `auth` down for **hours** (longer than the JWT TTL): refresh requests fail and users are eventually logged out as their JWTs expire. Mitigation: replicate `auth` (N pods behind a Service, multi-AZ on a hyperscaler; the macroservice is stateless once the session is in Redis-01).
+- `auth`'s **signing key rotated** while a downstream JWKS cache is stale: verification fails until the cache refreshes. Mitigation: standard JWKS rotation — publish the new key alongside the old for a window longer than the JWKS cache TTL, then retire the old key.
+
+Net: `auth` is a failure dependency for login, not for steady-state request validation. K8s replica count + standard JWKS rotation hygiene keep it from being a true SPOF.
+
 #### Language and runtime choice per macroservice
 
 The macroservices only need to agree on the wire protocol (gRPC + protobuf, see below), so each service can pick the runtime that best fits its workload — there's no rule that says everything has to stay Node + Express because the monolith was.
