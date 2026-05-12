@@ -2,7 +2,7 @@
 ## Cloud Hosted Real-time Messenging App (Discord-like)
 ### Authors: Pranav Jothivel, Christopher Brinker, Jacky Chen, and Zach Decena
 
-**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, 10.7 h sustained uptime (final autograder result).
+**Headline:** 3.3K peak concurrent connections at 218.0 msg/s, **~98.4 %** uptime across the 4-week project window (10.7 h cumulative downtime over 672 h).
 
 ---
 
@@ -47,18 +47,19 @@ systemctl reload haproxy                                 # LB config reload
 
 ## 3. Scaling and Load Handling
 
-The journey from default-everything to **3.3K concurrent / 218 msg/s / 10.7 h sustained** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
+The journey from default-everything to **3.3K concurrent / 218 msg/s / ~98.4 % uptime across 4 weeks** was a sequence of removing the current binding constraint and watching what became the new one. The main bottlenecks, in the order we hit them:
 
 | # | Bottleneck | Fix | Effect |
 |---|---|---|---|
-| 1 | PostgreSQL connection pool exhaustion (default Sequelize `max:5`, ~10 504s/sec under burst) | Pool bumped to 20, PgBouncer in transaction mode | 504 storm eliminated; pool stopped being binding |
+| 1 | PostgreSQL connection pool exhaustion (default Sequelize `max:5`, ~10 504s/sec under burst) | Pool bumped to 20, PgBouncer in transaction mode, dedicated Sequelize search pool | 504 storm eliminated; pool stopped being binding |
 | 2 | GIN pending-list flush serializing inserts (3.1 s flush stalls under load) | `ALTER INDEX … SET (fastupdate=off)` | Delivery p95 from 1.5–3 s → 300–700 ms band |
 | 3 | `sync({alter:true})` index bloat (182 duplicate `users_username_keyN` indexes) | Disabled `alter` in prod, cleanup script, manual SQL migration workflow | INSERT cost back to baseline; no further drift |
 | 4 | Single shared Redis client (HOL blocking; ~7 msg/s/worker ceiling) | Per-purpose Redis clients + dedicated Redis-02 for pub/sub | Each workload independent; unblocked subsequent passes |
 | 5 | Pub/sub fanout amplification (more WS subscribers = more publish work) | Three-pass restructure to per-worker pub/sub channels | Fanout cost scales with active receivers, not subscriber count |
-| 6 | Redis RDB BGSAVE forks (53 s saves, ~100 ms fork pauses per minute) | Disabled RDB on Redis-01 (state rebuildable from PG) | Periodic latency artifacts gone |
-| 7 | HAProxy single-thread + tight maxconn | `nbthread 4→16`, `maxconn 8192→32768`, HTTP/2 ALPN, `tune.ssl.lifetime`, second LB with BBR sysctl tune | HAProxy CPU 80% → 25%; cold p99 638 → ~400 ms |
-| 8 | Monolith worker (REST + WS on the same event loop) | `WORKER_ROLE` split: `http` / `ws` / `all` per node | WS event loops free of REST stalls; api-only workers skip pub/sub fanout |
+| 6 | WS broadcast payload size & hot-path cost (per-`deliverLocal` JSON.stringify; api-only nodes iterating empty `users` Map) | Pre-stringify at publisher, skip `deliverLocal` on api-only workers, chunk per-user fanout, debounce per-user `broadcastPresenceChange` | Per-publish event-loop cost on WS workers down substantially; api-only CPU stops spiking on broadcasts |
+| 7 | Redis RDB BGSAVE forks (53 s saves, ~100 ms fork pauses per minute) | Disabled RDB on Redis-01 (state rebuildable from PG) | Periodic latency artifacts gone |
+| 8 | HAProxy single-thread + tight maxconn | `nbthread 4→16`, `maxconn 8192→32768`, HTTP/2 ALPN, `tune.ssl.lifetime`, second LB with BBR sysctl tune | HAProxy CPU 80% → 25%; cold p99 638 → ~400 ms |
+| 9 | Monolith worker (REST + WS on the same event loop) | `WORKER_ROLE` split: `http` / `ws` / `all` per node | WS event loops free of REST stalls; api-only workers skip pub/sub fanout |
 
 The remaining limitations (dual-table FTS, read replica, lb02-in-pipeline, AOF on Redis-01, integration tests) are listed honestly in the detail doc.
 
@@ -115,7 +116,7 @@ To add a feature, run tests, or debug something that's been seen before — see 
 | **Jacky Chen** | Authentication (local + OAuth), search, attachment system, message-send hot path, HAProxy CPU tuning |
 | **Zach Decena** | Direct conversations (DMs + group DMs), messaging/presence optimization, issue tracking, vertical + horizontal node scaling |
 
-**Communication & process** — primary channel is the team Discord, with Sentry and Grafana alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. Deadlines were tracked against the autograder ranking — each ranking snapshot reset the priority queue around "what's the binding constraint now."
+**Communication & process** — primary channel is the team Discord, with Sentry, Grafana Cloud, and Axiom alerts piped into the same server. GitHub PRs are the unit of code review. Work was claim-based (whoever had the most context volunteered) rather than top-down assigned. Deadlines were tracked against the course ranking — each ranking snapshot reset the priority queue around "what's the binding constraint now."
 
 **Full per-member contribution detail with commit citations: [project-docs/TEAM.md](project-docs/TEAM.md).**
 
