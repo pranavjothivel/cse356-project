@@ -2,17 +2,17 @@
 
 ## Headline result
 
-| Peak concurrent connections | Peak message rate | Sustained uptime |
+| Peak concurrent connections | Peak message rate | Uptime over 4-week project window |
 |---|---|---|
-| **3.3K** | **218.0 / s** | **10.7 h** |
+| **3.3K** | **218.0 / s** | **~98.4 %** (10.7 h cumulative downtime across 672 h) |
 
-These are the final autograder numbers for `group1`. The remainder of this document walks through the bottlenecks we hit on the way there, the evidence we used to identify each one, the change we made, and the effect we measured.
+These are the final numbers for `group1`. The remainder of this document walks through the bottlenecks we hit on the way there, the evidence we used to identify each one, the change we made, and the effect we measured.
 
 ## How we measured
 
-- **Autograder runs** ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. Peak Conn and Peak Rate are therefore *demand-side* numbers — the autograder kept pushing until something broke. Reducing failure rates directly raised both ceilings.
+- **Load generator runs** (headless API-driven clients) ramped concurrent users until delivery / login failure rates passed a threshold, then backed off. Peak Conn and Peak Rate are therefore *demand-side* numbers — the load generator kept pushing until something broke. Reducing failure rates directly raised both ceilings.
 - **Loadgen reports** in [`loadgen-reports/`](../loadgen-reports/) capture the discrete tuning passes (BGSAVE-off baseline, GC tuning, optimistic broadcast, etc.) — JSON results paired with their corresponding `.log` files.
-- **Telemetry**: Grafana Alloy on every node shipping to a dedicated telemetry box, HAProxy stats endpoint (`/stats`), Sentry for unhandled exceptions, and inline `console.log` traces during incident investigations.
+- **Telemetry stack**: Grafana Alloy on every node and on a dedicated `group1-telemetry-01` collector, shipping logs + metrics to **Grafana Cloud** (Loki for logs, Mimir/Prometheus for metrics, hosted Grafana dashboards). HAProxy stats endpoint (`/stats`) for live LB state, Sentry for unhandled exceptions, **Axiom for HAProxy live log streaming** (per-request access logs piped via Vector for ad-hoc tail/aggregation during incidents). Inline `console.log` traces during deep-dive incident investigations.
 - **TLS-probe CSVs** in `loadgen-reports/2026-05-06-tls-probe*.csv` (script in [`scripts/tls-probe/`](../scripts/tls-probe/)) — used to characterize LB-side cold-handshake latency separately from app-side cost.
 
 The architecture the headline was measured against is described in [ARCHITECTURE.md](ARCHITECTURE.md); the diagram in [diagrams/architecture.png](diagrams/architecture.png) is the topology snapshot at that point.
@@ -22,7 +22,7 @@ The architecture the headline was measured against is described in [ARCHITECTURE
 ## Bottleneck 1 — PostgreSQL connection pool exhaustion
 
 ### Problem
-The default Sequelize pool size was `max: 5` per worker. The hottest write endpoint (`POST /api/conversations/:id/read`) ran **7–8 sequential queries** per request (a redundant `Conversation.findByPk` *and* `Channel.findByPk`, membership check, message lookup, an `isForwardRead` round-trip, the `member.save()` update, and on conversations a participant list fetch for the broadcast). Under autograder load all pool connections sat busy; new requests queued past Sequelize's 60s `acquire` timeout, which was longer than HAProxy's `timeout server 50s` — so HAProxy 504'd first, silently.
+The default Sequelize pool size was `max: 5` per worker. The hottest write endpoint (`POST /api/conversations/:id/read`) ran **7–8 sequential queries** per request (a redundant `Conversation.findByPk` *and* `Channel.findByPk`, membership check, message lookup, an `isForwardRead` round-trip, the `member.save()` update, and on conversations a participant list fetch for the broadcast). Under load-generator burst all pool connections sat busy; new requests queued past Sequelize's 60s `acquire` timeout, which was longer than HAProxy's `timeout server 50s` — so HAProxy 504'd first, silently.
 
 ### Evidence
 - **9,685 HAProxy 504 Gateway Timeouts in one day** (2026-04-13). Every log line carried timer `Tr=-1, Ta≈50000ms` and termination flag `sH--` — the signature of "TCP accepted, server never responded inside `timeout server`."
@@ -36,6 +36,7 @@ Multiple coordinated changes, by date:
 2. **`POST /api/conversations/:id/read`** — eliminated the duplicate `Channel.findByPk` lookup; ran the two table lookups concurrently when both were needed.
 3. **PgBouncer** (PR #65, `cb82f16`) — added a per-app-node local pooler in transaction mode. App connections multiplex onto a small number of real Postgres connections, removing the `max_connections` ceiling as a constraint.
 4. **`default_pool_size 20 → 50`** (`4bd832b`) — once PgBouncer was stable.
+5. **Dedicated Sequelize pool for search** (`80e4d01` by Pranav Jothivel) — split `server/src/db.js` to export both `sequelize` (main app pool, `max:14`) and `searchSequelize` (dedicated pool, `max:6`) so a heavy FTS query holding a pool slot can never starve the message-send hot path. `server/src/routes/search.js` was migrated to import the search pool. The split also opened the door to per-pool `statement_timeout` tuning.
 
 ### Effect
 504s stopped reproducing during loadgen runs. `pool.acquire` time fell from "near-timeout" to sub-millisecond on the steady-state path. The DB pool stopped being a binding constraint for the rest of the project; later bottlenecks were *downstream* of fixed pool capacity, not the pool itself.
@@ -48,7 +49,7 @@ PgBouncer in transaction mode is incompatible with session-scoped Postgres featu
 ## Bottleneck 2 — GIN pending-list flushes serializing inserts
 
 ### Problem
-The full-text search index is a `GIN` index on `messages.content_tsv`. GIN's default `fastupdate=on` buffers index entries into a per-index *pending list* on every INSERT; the pending list is flushed lazily, but the flush is a single serialized operation on the index. Under autograder write burst, the pending list grew faster than the lazy flush could keep up, and at some point an INSERT triggered a flush that took multiple seconds and serialized every concurrent INSERT behind it.
+The full-text search index is a `GIN` index on `messages.content_tsv`. GIN's default `fastupdate=on` buffers index entries into a per-index *pending list* on every INSERT; the pending list is flushed lazily, but the flush is a single serialized operation on the index. Under load-generator write burst, the pending list grew faster than the lazy flush could keep up, and at some point an INSERT triggered a flush that took multiple seconds and serialized every concurrent INSERT behind it.
 
 ### Evidence
 - A manual `gin_clean_pending_list('messages_content_fts_simple_idx')` measured **3.1 s for 190 pages** on 2026-05-04 — and that was off-peak. During load the pending list was larger.
@@ -141,7 +142,37 @@ The presence-aware routing adds Redis state writes on connect/disconnect (each w
 
 ---
 
-## Bottleneck 6 — Redis RDB BGSAVE forks blocking the command thread
+## Bottleneck 6 — WebSocket broadcast payload size & hot-path cost
+
+### Problem
+Even after the per-worker routing fix removed the *fan-out amplification* problem, the broadcast payload itself was still expensive. Each `POST /api/messages` produced a published event that subscribers had to deserialize and then iterate over per-recipient. Two hot-path costs sat on top of the payload:
+
+1. **Per-`deliverLocal` JSON.stringify** — for each receiving worker, the broadcast object was re-stringified on every `ws.send()`. With hundreds of local sockets per worker, the same payload was being re-serialized hundreds of times.
+2. **Unconditional `deliverLocal` on API-only workers** — even workers that held zero sockets were entering the per-recipient loop and iterating an empty `users` Map.
+
+Both of these compounded with payload size: bigger payload = more bytes to stringify, more bytes on the wire to every connected socket on the worker.
+
+### Evidence
+- `commandstats` on Redis-02 showed the per-publish cost stayed elevated even after the per-worker routing landed.
+- Event-loop-lag instrumentation (`0c51f6a`, `520484c`) attributed the residual cost to the broadcast hot path on WS workers, not to publish/subscribe overhead.
+- Profiling captures during the 2026-05-05 / 2026-05-06 tuning sessions showed JSON serialization as the dominant cost on hot WS workers.
+
+### Fix
+Cherry-picked into main as `4a5ce79` "Bring in 5/6-prod app-code optimizations" by Pranav Jothivel:
+- **Pre-stringify broadcast payload once at the publisher** — the payload is serialized exactly once and the resulting buffer is passed to all `deliverLocal` calls and to the cross-node publish.
+- **Skip `deliverLocal` entirely on api-only workers** — they don't hold any sockets, so iterating their `users` Map is pure waste.
+- **Chunk per-user fanout on the subscriber path** — large recipient sets are split into chunks so a single broadcast can't monopolize the event loop.
+- **Coalesce `broadcastPresenceChange` per user with a 250 ms debounce** — multiple rapid presence transitions collapse into one outbound frame instead of N.
+
+### Effect
+Per-broadcast event-loop cost on hot WS workers dropped substantially (visible in `LOG_EL_LAG=1` traces — p99 lag stopped tracking the per-publish rate). API-only nodes stopped showing the spurious deserialization CPU spikes.
+
+### Tradeoff / limitation
+The recipient set is now baked into the pre-stringified payload at publish time, so any per-recipient targeting must happen at the publish layer rather than on the receiving worker. We do that already via the per-worker routing (Bottleneck 5), so this fit cleanly — but it does close the door on cheap per-recipient payload customization.
+
+---
+
+## Bottleneck 7 — Redis RDB BGSAVE forks blocking the command thread
 
 ### Problem
 Redis-01 was running with the default `save 900 1 300 10 60 10000` policy. Under our write rate (presence updates, session writes, mutex releases) it triggered an RDB save every ~60 s. Each save begins with `fork(2)` of the **1.5 GB** Redis process; on this host that takes 46–100 ms during which the command thread is blocked. The save itself then runs for ~53 s of CoW copying, holding extra memory pressure.
@@ -168,7 +199,7 @@ If we ever store durable state on Redis-01, this trade reverses.
 
 ---
 
-## Bottleneck 7 — HAProxy single-thread + tight limits
+## Bottleneck 8 — HAProxy single-thread + tight limits
 
 ### Problem
 The LB was originally a 2 vCPU node running HAProxy with `nbthread 4` and `maxconn 8192`. After we resized it to 16 vCPU / 30 GB, `nbthread 4` left 12 cores idle while the 4 active threads stayed pegged. `maxconn 8192` started showing up as a hard wall as we approached 1.6K concurrent connections (each user holds several sockets — REST + WS + asset fetches).
@@ -202,7 +233,7 @@ The two LBs aren't yet behind a floating IP or DNS round-robin in the deploy pip
 
 ---
 
-## Bottleneck 8 — Worker role split (API / WS / HTTP-only)
+## Bottleneck 9 — Worker role split (API / WS / HTTP-only)
 
 ### Problem
 Every PM2 worker was a monolith: REST handlers, WebSocket server, Redis pub/sub subscribers all ran in the same event loop. A large GET (`/api/search` returning a few hundred results) would stall the WS event loop on the same worker. Cross-node pub/sub events deserialized in *every* worker — including workers that held no WS connections — wasting CPU on api-only nodes.
@@ -247,7 +278,3 @@ Honest list:
 3. **`lb02` outside the deploy pipeline.** The deploy pipeline only pushes to `lb01`; `lb02` is updated manually per the runbook in `infra/README.md`. Sharp edge; fixable.
 4. **No formal Redis persistence on `:6379`.** We chose this deliberately (everything is rebuildable from PG), but it means a Redis-01 restart is a brief session-loss event for users. AOF with a lax fsync policy would buy persistence without the BGSAVE stall.
 5. **No autoscaling.** The cluster is hand-scaled. Adding a node is well-documented (`claude-docs/api-node-bootstrap.md`) but requires a human.
-
-## What the analysis says
-
-The journey from default-everything to **3.3K concurrent / 218 msg/s / 10.7 h** wasn't a single big-bang fix; it was a sequence of *removing the current binding constraint* and watching what became the new one. Most of the wins were *structural* (the Redis split, the per-worker pubsub rewrite, the worker-role split, PgBouncer) rather than *constant-tuning* — that's the pattern we'd repeat for the next 10× too.
